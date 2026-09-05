@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   URBAN FURNITURE — design tokens
+
+   The palette is the showroom: bone paper, walnut, brass, and the warm
+   near-black of stained oak. Accounting software is read for hours at a time,
+   so the surfaces are warm rather than clinical white, and the rules between
+   rows are hairlines rather than shadows -- this should feel like a well-set
+   ledger book, not a dashboard.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* Surfaces */
+  --color-paper: #f4f0e9;
+  --color-paper-2: #ebe5da;
+  --color-surface: #fffdf9;
+  --color-surface-2: #faf7f0;
+  --color-surface-3: #f2ede3;
+
+  /* Wood — the sidebar and header are stained oak */
+  --color-oak: #241d17;
+  --color-oak-2: #332920;
+  --color-oak-3: #4a3c2f;
+
+  /* Ink */
+  --color-ink: #1f1b16;
+  --color-ink-2: #574d42;
+  --color-ink-3: #8a7d6d;
+  --color-ink-4: #a99c8a;
+
+  /* Hairlines */
+  --color-rule: #e4dcce;
+  --color-rule-2: #d3c8b5;
+  --color-rule-3: #c0b29b;
+
+  /* Brand */
+  --color-walnut: #7a4a28;
+  --color-walnut-2: #613819;
+  --color-walnut-3: #f0e3d6;
+  --color-brass: #a97e35;
+  --color-brass-2: #f5ecd8;
+
+  /* Semantic — ledger conventions */
+  --color-ledger: #2d5c4a;
+  --color-ledger-2: #e3efe8;
+  --color-oxide: #99372a;
+  --color-oxide-2: #f8e5e0;
+  --color-amber: #9a6d15;
+  --color-amber-2: #fbeed2;
+
+  /* Type */
+  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* Squarer than the default. Furniture has corners. */
+  --radius-sm: 0.1875rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+
+  /* Money must never shimmy as digits change. Every numeric cell in the app
+     inherits tabular figures. */
+  table,
+  input,
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  ::selection {
+    background-color: var(--color-brass-2);
+    color: var(--color-ink);
+  }
+
+  /* Focus rings: brass, and only for keyboard users. */
+  :focus-visible {
+    outline: 2px solid var(--color-brass);
+    outline-offset: 1px;
+  }
+
+  /* Scrollbars, warmed up to match. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-rule-2) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--color-rule-2);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 99px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-rule-3);
+  }
+}
+
+@layer components {
+  /* The small-caps label used above every field and section in the app. */
+  .label-caps {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--color-ink-3);
+  }
+
+  /* A hairline that reads as a ruled ledger line rather than a border. */
+  .rule-t {
+    border-top: 1px solid var(--color-rule);
+  }
+  .rule-b {
+    border-bottom: 1px solid var(--color-rule);
+  }
+
+  /* The double rule under a report total — the printed-ledger convention for
+     "this is the final figure". */
+  .rule-total {
+    border-top: 1px solid var(--color-ink);
+    border-bottom: 3px double var(--color-ink);
+  }
+}
+
+/* Reports get printed. An accounting app that produces an unusable printout is
+   missing a feature its users rely on daily. */
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-full {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+  }
+
+  @page {
+    margin: 14mm;
+  }
+}

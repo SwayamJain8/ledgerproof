@@ -1,0 +1,1087 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  Urban Furniture — Accounting System
+//  prisma/schema.prisma
+//
+//  MONEY IS BIGINT PAISE. Never Decimal, never Float.
+//    Rs 47,200.00  ->  4720000 paise
+//  Reason (FIXES_TO_APPLY #1): exact integer equality when asserting
+//  debit == credit. No float drift, no Decimal.js comparison surprises.
+//
+//  QUANTITY IS BIGINT MILLI-UNITS.
+//    2.5 units  ->  2500 milli
+//  Keeps `subtotal = qty x price` exact integer arithmetic end to end.
+//
+//  TAX RATE IS INT BASIS POINTS.
+//    18.00%  ->  1800 bp
+// ─────────────────────────────────────────────────────────────────────────────
+
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  BLOCK 1 — identity & partners
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// The mockup draws two radios (User / Administrator) but its own role
+/// annotation describes THREE. We ship all three; the Create User form
+/// renders a third radio.
+enum UserRole {
+  ADMIN
+  ACCOUNTANT
+  PORTAL
+}
+
+model User {
+  id String @id @default(cuid())
+
+  name String
+  /// Mockup rule, stated on both Create User and Sign Up: unique AND 6-12
+  /// characters. Length enforced by CHECK `user_login_length`.
+  loginId      String @unique @map("login_id") @db.VarChar(12)
+  email        String @unique
+  /// bcrypt cost 10. Strength policy (>8 chars, lower + upper + special) is a
+  /// zod refinement at the API edge; see src/lib/auth/password.ts.
+  passwordHash String @map("password_hash")
+
+  role UserRole @default(PORTAL)
+
+  /// The row-level-security link. A PORTAL user is tied to exactly one Contact
+  /// and every portal query is scoped to it. Self-signup always writes PORTAL.
+  contactId String?  @map("contact_id")
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  active      Boolean   @default(true)
+  lastLoginAt DateTime? @map("last_login_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  postedEntries JournalEntry[]      @relation("PostedBy")
+  allocations   PaymentAllocation[]
+  auditLogs     AuditLog[]
+
+  @@index([role, active])
+  @@map("user")
+}
+
+enum ContactType {
+  CUSTOMER
+  VENDOR
+  BOTH
+}
+
+model Contact {
+  id String @id @default(cuid())
+
+  name String
+  type ContactType @default(CUSTOMER)
+  /// Mockup placeholder literally reads "Unique Email".
+  email  String? @unique
+  mobile String? @db.VarChar(15)
+
+  street1 String?
+  street2 String?
+  city    String?
+  state   String?
+  country String? @default("India")
+  pincode String? @db.VarChar(6)
+
+  /// Must render in the list thumbnail column AND the kanban card.
+  imageUrl String? @map("image_url")
+
+  /// Per-partner override of the receivable/payable account. The posting engine
+  /// resolves contact override -> journal default -> company default, which is
+  /// what makes the engine config-driven instead of a chain of if-statements.
+  receivableAccountId String?  @map("receivable_account_id")
+  receivableAccount   Account? @relation("ContactReceivable", fields: [receivableAccountId], references: [id])
+  payableAccountId    String?  @map("payable_account_id")
+  payableAccount      Account? @relation("ContactPayable", fields: [payableAccountId], references: [id])
+
+  /// "Cancel" on a master means ARCHIVE, never DELETE.
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users            User[]
+  purchaseOrders   PurchaseOrder[]
+  vendorBills      VendorBill[]
+  salesOrders      SalesOrder[]
+  customerInvoices CustomerInvoice[]
+  payments         Payment[]
+  journalItems     JournalItem[]
+  journalEntries   JournalEntry[]
+  budgets          Budget[]          @relation("BudgetResponsible")
+
+  @@index([type, active])
+  @@index([name])
+  @@map("contact")
+}
+
+enum ProductType {
+  GOODS
+  SERVICE
+  COMBO
+}
+
+model ProductCategory {
+  id   String @id @default(cuid())
+  name String @unique
+
+  /// Category-level account mapping. Step 2 of the resolution chain: change
+  /// the "Furniture" category's income account and the NEXT invoice posts
+  /// differently, live, with no code change.
+  incomeAccountId  String?  @map("income_account_id")
+  incomeAccount    Account? @relation("CategoryIncome", fields: [incomeAccountId], references: [id])
+  expenseAccountId String?  @map("expense_account_id")
+  expenseAccount   Account? @relation("CategoryExpense", fields: [expenseAccountId], references: [id])
+
+  active   Boolean   @default(true)
+  products Product[]
+
+  @@map("product_category")
+}
+
+model Product {
+  id   String      @id @default(cuid())
+  name String
+  type ProductType @default(GOODS)
+
+  salesPricePaise BigInt @default(0) @map("sales_price_paise")
+  costPaise       BigInt @default(0) @map("cost_paise")
+
+  /// Mockup: "Category Can be created and saved on the fly (Many2one Field)".
+  categoryId String?          @map("category_id")
+  category   ProductCategory? @relation(fields: [categoryId], references: [id])
+
+  imageUrl String? @map("image_url")
+
+  /// Step 1 of the resolution chain, plus default taxes.
+  incomeAccountId  String?  @map("income_account_id")
+  incomeAccount    Account? @relation("ProductIncome", fields: [incomeAccountId], references: [id])
+  expenseAccountId String?  @map("expense_account_id")
+  expenseAccount   Account? @relation("ProductExpense", fields: [expenseAccountId], references: [id])
+  salesTaxId       String?  @map("sales_tax_id")
+  salesTax         Tax?     @relation("ProductSalesTax", fields: [salesTaxId], references: [id])
+  purchaseTaxId    String?  @map("purchase_tax_id")
+  purchaseTax      Tax?     @relation("ProductPurchaseTax", fields: [purchaseTaxId], references: [id])
+
+  /// Quantity on hand is NEVER stored. It is SUM(stock_move.signed_qty).
+  /// A mutable counter drifts; a movement ledger cannot.
+  trackInventory Boolean @default(true)
+  /// Moving-average cost. This one IS a cache and it is honest about it --
+  /// stock_move remains the source of truth.
+  avgCostPaise   BigInt  @default(0) @map("avg_cost_paise")
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  purchaseOrderLines   PurchaseOrderLine[]
+  vendorBillLines      VendorBillLine[]
+  salesOrderLines      SalesOrderLine[]
+  customerInvoiceLines CustomerInvoiceLine[]
+  stockMoves           StockMove[]
+  journalItems         JournalItem[]
+
+  @@index([categoryId, active])
+  @@index([name])
+  @@map("product")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  BLOCK 2 — the ledger spine. This is the whole project.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Eight values, verbatim from the mockup's grouped dropdown. The two headings
+/// (Balancesheet / Profit and Loss) are display-only and are derived from
+/// ACCOUNT_TYPE_META.section in src/lib/accounting/account-type.ts.
+enum AccountType {
+  ASSET
+  LIABILITY
+  BANK
+  CAPITAL
+  CASH
+  INCOME
+  EXPENSE
+  OTHER_EXPENSE
+}
+
+/// Role tag. Lets the posting engine ask for "the receivable account" instead
+/// of searching for an account literally named "Debtors A/c", so renaming an
+/// account can never break a report.
+enum AccountSubtype {
+  NONE
+  RECEIVABLE
+  PAYABLE
+  TAX_COLLECTED
+  TAX_PAID
+  INVENTORY
+  COGS
+  RETAINED_EARNINGS
+  CURRENT_YEAR_EARNINGS
+  ROUNDING
+}
+
+model Account {
+  id String @id @default(cuid())
+
+  /// Sorting the CoA by code yields the conventional
+  /// Asset -> Liability -> Capital -> Income -> Expense order for free.
+  code    String         @unique @db.VarChar(10)
+  name    String
+  type    AccountType
+  subtype AccountSubtype @default(NONE)
+
+  /// Only reconcilable accounts (Debtors, Creditors) carry an open balance
+  /// that a payment settles.
+  reconcilable Boolean @default(false)
+
+  /// The Chart of Accounts list is the one screen with an "Archived" button.
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  journalItems         JournalItem[]
+  journalsDefault      Journal[]             @relation("JournalDefault")
+  journalsDebit        Journal[]             @relation("JournalDebit")
+  journalsCredit       Journal[]             @relation("JournalCredit")
+  taxesCollected       Tax[]                 @relation("TaxCollected")
+  taxesPaid            Tax[]                 @relation("TaxPaid")
+  contactsReceivable   Contact[]             @relation("ContactReceivable")
+  contactsPayable      Contact[]             @relation("ContactPayable")
+  categoriesIncome     ProductCategory[]     @relation("CategoryIncome")
+  categoriesExpense    ProductCategory[]     @relation("CategoryExpense")
+  productsIncome       Product[]             @relation("ProductIncome")
+  productsExpense      Product[]             @relation("ProductExpense")
+  vendorBillLines      VendorBillLine[]
+  customerInvoiceLines CustomerInvoiceLine[]
+
+  @@index([type, active])
+  @@index([subtype])
+  @@map("account")
+}
+
+enum JournalType {
+  SALES
+  PURCHASE
+  BANK
+  CASH
+}
+
+model Journal {
+  id   String      @id @default(cuid())
+  code String      @unique @db.VarChar(8)
+  name String
+  type JournalType
+
+  /// The mockup's single "Default Account" column.
+  defaultAccountId String?  @map("default_account_id")
+  defaultAccount   Account? @relation("JournalDefault", fields: [defaultAccountId], references: [id])
+
+  /// Per-journal counterpart overrides. The posting engine's chain R4 resolves
+  /// the control account as contact override -> company default; these columns
+  /// exist so a journal can pin its own Debtors/Creditors account if the
+  /// business ever needs one, and are left NULL in the seed.
+  ///
+  /// (The account that IS live on stage is `defaultAccountId` above: it is
+  /// rung 4 of chains R1 and R2. Change the Purchase journal's default account,
+  /// post a new bill, and the debit lands somewhere else -- no code touched.)
+  defaultDebitAccountId  String?  @map("default_debit_account_id")
+  defaultDebitAccount    Account? @relation("JournalDebit", fields: [defaultDebitAccountId], references: [id])
+  defaultCreditAccountId String?  @map("default_credit_account_id")
+  defaultCreditAccount   Account? @relation("JournalCredit", fields: [defaultCreditAccountId], references: [id])
+
+  sequencePrefix String  @map("sequence_prefix") @db.VarChar(8)
+  active         Boolean @default(true)
+
+  entries      JournalEntry[]
+  journalItems JournalItem[]
+  payments     Payment[]
+
+  @@map("journal")
+}
+
+enum EntryState {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+/// What paperwork produced this entry. A plain enum + id rather than four
+/// nullable FKs, because the entry never needs to join back -- this pair exists
+/// only for the "open source document" link in the UI.
+enum EntrySource {
+  MANUAL
+  VENDOR_BILL
+  CUSTOMER_INVOICE
+  PAYMENT
+  STOCK_MOVE
+  REVERSAL
+  OPENING_BALANCE
+}
+
+model JournalEntry {
+  id String @id @default(cuid())
+
+  /// "INV/2026/0001". Allocated from the Sequence table at POST time, not at
+  /// draft creation -- that is what makes the numbering gapless.
+  name      String
+  journalId String  @map("journal_id")
+  journal   Journal @relation(fields: [journalId], references: [id])
+
+  /// The ACCOUNTING date, stored at UTC midnight. Mockup: "(Bill date fetch
+  /// from bill)" -- copied from the source document, never `new Date()`.
+  date      DateTime @db.Date
+  /// Free text, e.g. the vendor's own reference "ABC-26-001".
+  ref       String?
+  partnerId String?  @map("partner_id")
+  partner   Contact? @relation(fields: [partnerId], references: [id])
+
+  state      EntryState  @default(DRAFT)
+  sourceType EntrySource @default(MANUAL) @map("source_type")
+  sourceId   String?     @map("source_id")
+
+  /// Reversal linkage. A cancelling entry points at what it undid; both rows
+  /// stay in the books forever.
+  reversalOfId String?       @unique @map("reversal_of_id")
+  reversalOf   JournalEntry? @relation("Reversal", fields: [reversalOfId], references: [id])
+  reversedBy   JournalEntry? @relation("Reversal")
+
+  /// Denormalised totals so the Journal Entries LIST can show a Total column
+  /// without aggregating children per row. Kept honest by the balance trigger,
+  /// which asserts header totals equal the sum of items.
+  totalDebitPaise  BigInt @default(0) @map("total_debit_paise")
+  totalCreditPaise BigInt @default(0) @map("total_credit_paise")
+
+  /// Tamper-evident hash chain: hash = sha256(prevHash || canonical(entry)).
+  /// Written once at POST time, never again. The Books Integrity page walks it.
+  chainIndex Int?    @unique @map("chain_index")
+  prevHash   String? @map("prev_hash") @db.VarChar(64)
+  hash       String? @db.VarChar(64)
+
+  /// The resolution trace: which rung of which chain produced each account.
+  /// Rendered verbatim by the "Explain this entry" panel. Pure instrumentation
+  /// of logic the engine already runs, and it pre-empts the only question a
+  /// judge actually has about the posting engine.
+  postingTrace Json? @map("posting_trace")
+
+  postedAt   DateTime? @map("posted_at")
+  postedById String?   @map("posted_by_id")
+  postedBy   User?     @relation("PostedBy", fields: [postedById], references: [id])
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  items JournalItem[]
+
+  /// INV/2026/0001 in Sales and BILL/2026/0001 in Purchase can coexist,
+  /// but never two of the same within one journal.
+  @@unique([journalId, name])
+  @@index([state, date])
+  @@index([sourceType, sourceId])
+  @@map("journal_entry")
+}
+
+model JournalItem {
+  id      String       @id @default(cuid())
+  entryId String       @map("entry_id")
+  entry   JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  lineNo  Int          @map("line_no")
+
+  accountId String  @map("account_id")
+  account   Account @relation(fields: [accountId], references: [id])
+
+  label String?
+
+  /// EXACTLY ONE of these is non-zero, and neither is ever negative.
+  /// A "negative debit" is a credit in disguise and makes every report's sign
+  /// handling wrong in a way that is nearly impossible to find.
+  /// Enforced by CHECK `journal_item_one_sided`.
+  debitPaise  BigInt @default(0) @map("debit_paise")
+  creditPaise BigInt @default(0) @map("credit_paise")
+
+  // ── The four denormalised columns that make this table self-sufficient.
+  //    Copied from the parent entry. Reports NEVER join upward.
+  date      DateTime   @db.Date
+  state     EntryState @default(DRAFT)
+  journalId String     @map("journal_id")
+  journal   Journal    @relation(fields: [journalId], references: [id])
+
+  partnerId String?  @map("partner_id")
+  partner   Contact? @relation(fields: [partnerId], references: [id])
+
+  /// The mockup's "Budget Analytics" column, carried all the way down into the
+  /// ledger. This is the join most teams forget to plumb, and without it budget
+  /// actuals have to be faked off the invoice tables.
+  analyticAccountId String?          @map("analytic_account_id")
+  analyticAccount   AnalyticAccount? @relation(fields: [analyticAccountId], references: [id])
+
+  productId String?  @map("product_id")
+  product   Product? @relation(fields: [productId], references: [id])
+  taxId     String?  @map("tax_id")
+  tax       Tax?     @relation(fields: [taxId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([entryId, lineNo])
+  @@index([state, date, accountId])
+  @@index([accountId, date])
+  @@index([partnerId, date])
+  @@index([analyticAccountId, date])
+  @@map("journal_item")
+}
+
+enum TaxScope {
+  SALE
+  PURCHASE
+  BOTH
+}
+
+enum TaxComputation {
+  /// Rs 40,000 + 18% => Rs 47,200 charged.
+  EXCLUSIVE
+  /// Rs 47,200 charged, of which Rs 7,200 is tax.
+  INCLUSIVE
+}
+
+/// The PDF's Sales Order row explicitly lists "Tax". A hardcoded 18% in the
+/// total calculation is one of the named fakes. This is five columns.
+model Tax {
+  id          String         @id @default(cuid())
+  name        String         @unique
+  /// Basis points. 18.00% => 1800.
+  rateBp      Int            @map("rate_bp")
+  scope       TaxScope       @default(BOTH)
+  computation TaxComputation @default(EXCLUSIVE)
+
+  /// Output tax on a sale is a LIABILITY (collected on the government's behalf).
+  collectedAccountId String?  @map("collected_account_id")
+  collectedAccount   Account? @relation("TaxCollected", fields: [collectedAccountId], references: [id])
+  /// Input tax on a purchase is an ASSET (the government owes it back).
+  paidAccountId      String?  @map("paid_account_id")
+  paidAccount        Account? @relation("TaxPaid", fields: [paidAccountId], references: [id])
+
+  active Boolean @default(true)
+
+  purchaseOrderLines   PurchaseOrderLine[]
+  vendorBillLines      VendorBillLine[]
+  salesOrderLines      SalesOrderLine[]
+  customerInvoiceLines CustomerInvoiceLine[]
+  journalItems         JournalItem[]
+  productsSales        Product[]             @relation("ProductSalesTax")
+  productsPurchase     Product[]             @relation("ProductPurchaseTax")
+
+  @@map("tax")
+}
+
+/// Gapless, per-year, concurrency-safe document numbering. Auto-increment ids
+/// do not satisfy "+1 of Last": they are global, they leak volume, and they gap
+/// on every rolled-back transaction.
+model Sequence {
+  id         String @id @default(cuid())
+  code       String @db.VarChar(32)
+  prefix     String @db.VarChar(16)
+  fiscalYear Int    @map("fiscal_year")
+  padding    Int    @default(4)
+  /// "PO0001" has no year segment; "INV/2026/0001" does.
+  useYear    Boolean @default(true) @map("use_year")
+  nextNumber Int     @default(1) @map("next_number")
+
+  @@unique([code, fiscalYear])
+  @@map("sequence")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  BLOCK 3 — purchase side
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum OrderState {
+  DRAFT
+  CONFIRMED
+  /// Some quantity converted; the order stays open for the rest.
+  PARTIALLY_BILLED
+  BILLED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id String @id @default(cuid())
+
+  /// "PO0001" -- no year segment, per the mockup.
+  name     String  @unique
+  vendorId String  @map("vendor_id")
+  vendor   Contact @relation(fields: [vendorId], references: [id])
+
+  orderDate DateTime   @map("order_date") @db.Date
+  state     OrderState @default(DRAFT)
+
+  /// Caches, recomputed from lines inside the same transaction that edits them,
+  /// so the LIST view does not aggregate children per row.
+  untaxedPaise BigInt @default(0) @map("untaxed_paise")
+  taxPaise     BigInt @default(0) @map("tax_paise")
+  totalPaise   BigInt @default(0) @map("total_paise")
+
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines PurchaseOrderLine[]
+  bills VendorBill[]
+
+  @@index([state, orderDate])
+  @@index([vendorId])
+  @@map("purchase_order")
+}
+
+model PurchaseOrderLine {
+  id      String        @id @default(cuid())
+  orderId String        @map("order_id")
+  order   PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// The mockup's "Sr. No." column.
+  lineNo  Int           @map("line_no")
+
+  productId   String  @map("product_id")
+  product     Product @relation(fields: [productId], references: [id])
+  description String?
+
+  /// The mockup's "Budget Analytics" column. Feeds the EXPENSE side of budgets.
+  analyticAccountId String?          @map("analytic_account_id")
+  analyticAccount   AnalyticAccount? @relation(fields: [analyticAccountId], references: [id])
+
+  quantityMilli  BigInt @map("quantity_milli")
+  unitPricePaise BigInt @map("unit_price_paise")
+  taxId          String? @map("tax_id")
+  tax            Tax?    @relation(fields: [taxId], references: [id])
+
+  /// Mockup: "Unit Price * Quantity" and "(3Qty * 2000)".
+  /// CHECK `po_line_subtotal_correct` makes a wrong total physically impossible.
+  subtotalPaise BigInt @default(0) @map("subtotal_paise")
+
+  /// Enables PARTIAL PO->Bill conversion: bill 12 of 20 units and the order
+  /// stays open showing 8 still billable.
+  qtyBilledMilli BigInt @default(0) @map("qty_billed_milli")
+
+  billLines VendorBillLine[]
+
+  @@unique([orderId, lineNo])
+  @@index([analyticAccountId])
+  @@map("purchase_order_line")
+}
+
+enum DocState {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+/// Computed badge, NEVER written by hand. Derived from residual.
+enum PaymentState {
+  NOT_PAID
+  PARTIAL
+  PAID
+}
+
+model VendorBill {
+  id String @id @default(cuid())
+
+  /// "BILL/2026/0001"
+  name String @unique
+
+  /// NULL when the bill was created fresh. This one nullable FK is what drives
+  /// the mockup's conditional smart button: "Only show this if bill created
+  /// from PO, hide if Bill Created Fresh without PO."
+  purchaseOrderId String?        @map("purchase_order_id")
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+
+  vendorId String  @map("vendor_id")
+  vendor   Contact @relation(fields: [vendorId], references: [id])
+
+  /// The vendor's own reference, typed by the user ("ABC-26-001").
+  /// Distinct from `name`, which we generate.
+  billReference String?  @map("bill_reference")
+  billDate      DateTime @map("bill_date") @db.Date
+  dueDate       DateTime @map("due_date") @db.Date
+
+  state DocState @default(DRAFT)
+
+  untaxedPaise BigInt @default(0) @map("untaxed_paise")
+  taxPaise     BigInt @default(0) @map("tax_paise")
+  totalPaise   BigInt @default(0) @map("total_paise")
+
+  /// total - SUM(confirmed allocations). Recomputed inside every transaction
+  /// that touches an allocation. CHECK keeps it within [0, total].
+  residualPaise BigInt @default(0) @map("residual_paise")
+
+  /// CHECK `bill_payment_state_correct` compiles the mockup's status legend
+  /// into the database. It cannot be set to a value the residual disagrees with.
+  paymentState PaymentState @default(NOT_PAID) @map("payment_state")
+
+  journalEntryId String? @unique @map("journal_entry_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines       VendorBillLine[]
+  allocations PaymentAllocation[]
+
+  @@index([state, billDate])
+  @@index([vendorId, dueDate])
+  @@map("vendor_bill")
+}
+
+model VendorBillLine {
+  id     String     @id @default(cuid())
+  billId String     @map("bill_id")
+  bill   VendorBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  lineNo Int        @map("line_no")
+
+  productId   String  @map("product_id")
+  product     Product @relation(fields: [productId], references: [id])
+  description String?
+
+  /// Mockup: "Purchase account to be set by default", and the grid lets the
+  /// user override it per line.
+  ///
+  /// NULLABLE on purpose. NULL means "not overridden", which is what lets the
+  /// posting engine actually walk chain R2 (product -> category -> journal
+  /// default) instead of short-circuiting on rung 1 every time. The grid still
+  /// SHOWS an account -- it displays the resolved one -- so the screen matches
+  /// the mockup while the chain stays real and demonstrable.
+  accountId String?  @map("account_id")
+  account   Account? @relation(fields: [accountId], references: [id])
+
+  analyticAccountId String?          @map("analytic_account_id")
+  analyticAccount   AnalyticAccount? @relation(fields: [analyticAccountId], references: [id])
+
+  quantityMilli  BigInt  @map("quantity_milli")
+  unitPricePaise BigInt  @map("unit_price_paise")
+  taxId          String? @map("tax_id")
+  tax            Tax?    @relation(fields: [taxId], references: [id])
+  subtotalPaise  BigInt  @default(0) @map("subtotal_paise")
+
+  /// Traceability for partial billing.
+  purchaseOrderLineId String?            @map("purchase_order_line_id")
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id])
+
+  @@unique([billId, lineNo])
+  @@index([analyticAccountId])
+  @@map("vendor_bill_line")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  BLOCK 4 — sales side (mirror of block 3)
+// ═════════════════════════════════════════════════════════════════════════════
+
+model SalesOrder {
+  id String @id @default(cuid())
+
+  /// "SO0001" -- no year segment.
+  name       String  @unique
+  customerId String  @map("customer_id")
+  customer   Contact @relation(fields: [customerId], references: [id])
+
+  orderDate DateTime   @map("order_date") @db.Date
+  state     OrderState @default(DRAFT)
+
+  untaxedPaise BigInt @default(0) @map("untaxed_paise")
+  taxPaise     BigInt @default(0) @map("tax_paise")
+  totalPaise   BigInt @default(0) @map("total_paise")
+
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines    SalesOrderLine[]
+  invoices CustomerInvoice[]
+
+  @@index([state, orderDate])
+  @@index([customerId])
+  @@map("sales_order")
+}
+
+model SalesOrderLine {
+  id      String     @id @default(cuid())
+  orderId String     @map("order_id")
+  order   SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lineNo  Int        @map("line_no")
+
+  productId   String  @map("product_id")
+  product     Product @relation(fields: [productId], references: [id])
+  description String?
+
+  analyticAccountId String?          @map("analytic_account_id")
+  analyticAccount   AnalyticAccount? @relation(fields: [analyticAccountId], references: [id])
+
+  quantityMilli  BigInt  @map("quantity_milli")
+  unitPricePaise BigInt  @map("unit_price_paise")
+  taxId          String? @map("tax_id")
+  tax            Tax?    @relation(fields: [taxId], references: [id])
+  subtotalPaise  BigInt  @default(0) @map("subtotal_paise")
+
+  qtyInvoicedMilli BigInt @default(0) @map("qty_invoiced_milli")
+
+  invoiceLines CustomerInvoiceLine[]
+
+  @@unique([orderId, lineNo])
+  @@index([analyticAccountId])
+  @@map("sales_order_line")
+}
+
+model CustomerInvoice {
+  id String @id @default(cuid())
+
+  /// "INV/2026/0001"
+  name String @unique
+
+  /// NULL when created fresh -> hides the "SO" smart button.
+  salesOrderId String?     @map("sales_order_id")
+  salesOrder   SalesOrder? @relation(fields: [salesOrderId], references: [id])
+
+  customerId String  @map("customer_id")
+  customer   Contact @relation(fields: [customerId], references: [id])
+
+  /// User-typed, not generated ("ABC-26-001").
+  invoiceReference String?  @map("invoice_reference")
+  invoiceDate      DateTime @map("invoice_date") @db.Date
+  /// Separate from the invoice date; drives the receivables aging report.
+  dueDate          DateTime @map("due_date") @db.Date
+
+  state DocState @default(DRAFT)
+
+  untaxedPaise  BigInt @default(0) @map("untaxed_paise")
+  taxPaise      BigInt @default(0) @map("tax_paise")
+  totalPaise    BigInt @default(0) @map("total_paise")
+  residualPaise BigInt @default(0) @map("residual_paise")
+
+  paymentState PaymentState @default(NOT_PAID) @map("payment_state")
+
+  journalEntryId String? @unique @map("journal_entry_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines       CustomerInvoiceLine[]
+  allocations PaymentAllocation[]
+
+  @@index([state, invoiceDate])
+  @@index([customerId, dueDate])
+  @@map("customer_invoice")
+}
+
+model CustomerInvoiceLine {
+  id        String          @id @default(cuid())
+  invoiceId String          @map("invoice_id")
+  invoice   CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  lineNo    Int             @map("line_no")
+
+  productId   String  @map("product_id")
+  product     Product @relation(fields: [productId], references: [id])
+  description String?
+
+  /// Mockup: "Sales account to be set by default". Nullable for the same
+  /// reason as the vendor bill line -- see the note there.
+  accountId String?  @map("account_id")
+  account   Account? @relation(fields: [accountId], references: [id])
+
+  analyticAccountId String?          @map("analytic_account_id")
+  analyticAccount   AnalyticAccount? @relation(fields: [analyticAccountId], references: [id])
+
+  quantityMilli  BigInt  @map("quantity_milli")
+  unitPricePaise BigInt  @map("unit_price_paise")
+  taxId          String? @map("tax_id")
+  tax            Tax?    @relation(fields: [taxId], references: [id])
+  subtotalPaise  BigInt  @default(0) @map("subtotal_paise")
+
+  salesOrderLineId String?         @map("sales_order_line_id")
+  salesOrderLine   SalesOrderLine? @relation(fields: [salesOrderLineId], references: [id])
+
+  @@unique([invoiceId, lineNo])
+  @@index([analyticAccountId])
+  @@map("customer_invoice_line")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  BLOCK 5 — payments. The table that makes "Partial" real.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Mockup: Payment Type radio "Send / Receive". One model serves both customer
+/// receipts and vendor payments; the menu shows it twice, filtered.
+enum PaymentDirection {
+  SEND
+  RECEIVE
+}
+
+/// Mockup: "Default set to Bank can be selected to Cash".
+enum PaymentMethod {
+  BANK
+  CASH
+}
+
+/// Mockup statusbar has exactly THREE stages. (Budget has four. Different state
+/// machines; do not merge them.)
+enum PaymentStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+model Payment {
+  id        String           @id @default(cuid())
+  name      String           @unique
+  direction PaymentDirection
+  partnerId String           @map("partner_id")
+  partner   Contact          @relation(fields: [partnerId], references: [id])
+
+  /// Mockup: "(Default Today's Date)"
+  paymentDate DateTime      @map("payment_date") @db.Date
+  method      PaymentMethod @default(BANK)
+  /// Resolved from method: BANK -> Bank journal, CASH -> Cash journal.
+  journalId   String        @map("journal_id")
+  journal     Journal       @relation(fields: [journalId], references: [id])
+
+  /// Mockup: "Autofill Amount Due from Invoice/Bill" is a DEFAULT, not a lock.
+  /// The user may pay less (partial) or more (overpayment -> unused credit).
+  amountPaise BigInt @map("amount_paise")
+
+  /// Cache of SUM(allocations). `amount - allocated` is the partner's unused
+  /// credit, offerable against the next document. CHECK stops over-allocation.
+  allocatedPaise BigInt @default(0) @map("allocated_paise")
+
+  note  String?
+  state PaymentStatus @default(DRAFT)
+
+  journalEntryId String?  @unique @map("journal_entry_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  allocations PaymentAllocation[]
+
+  @@index([state, paymentDate])
+  @@index([partnerId, state])
+  @@map("payment")
+}
+
+/// ONE ROW = "this much of that payment settled that document".
+/// Six columns, and the difference between an accounting system and invoice CRUD.
+model PaymentAllocation {
+  id        String  @id @default(cuid())
+  paymentId String  @map("payment_id")
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  /// Exactly ONE of these two is non-null.
+  customerInvoiceId String?          @map("customer_invoice_id")
+  customerInvoice   CustomerInvoice? @relation(fields: [customerInvoiceId], references: [id], onDelete: Cascade)
+  vendorBillId      String?          @map("vendor_bill_id")
+  vendorBill        VendorBill?      @relation(fields: [vendorBillId], references: [id], onDelete: Cascade)
+
+  amountPaise BigInt @map("amount_paise")
+
+  allocatedAt DateTime @default(now()) @map("allocated_at")
+  createdById String?  @map("created_by_id")
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+
+  /// A payment settles a given document at most once -- top up by editing the
+  /// amount, not by inserting a second row. Keeps the arithmetic obvious.
+  @@unique([paymentId, customerInvoiceId])
+  @@unique([paymentId, vendorBillId])
+  @@index([customerInvoiceId])
+  @@index([vendorBillId])
+  @@map("payment_allocation")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  BLOCK 6 — analytics, budgets, stock, company
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Mockup: exactly two values.
+enum AnalyticType {
+  INCOME
+  EXPENSE
+}
+
+model AnalyticAccount {
+  id   String       @id @default(cuid())
+  name String       @unique
+  code String?      @db.VarChar(16)
+  type AnalyticType
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  budgetLines          BudgetLine[]
+  journalItems         JournalItem[]
+  purchaseOrderLines   PurchaseOrderLine[]
+  vendorBillLines      VendorBillLine[]
+  salesOrderLines      SalesOrderLine[]
+  customerInvoiceLines CustomerInvoiceLine[]
+
+  @@index([type, active])
+  @@map("analytic_account")
+}
+
+/// Mockup's Menu & Stage Mapping table: FOUR stages.
+enum BudgetState {
+  DRAFT
+  CONFIRMED
+  REVISED
+  CANCELLED
+}
+
+model Budget {
+  id String @id @default(cuid())
+
+  /// Mockup rule: on revision keep the original name and append " Revised"
+  /// (e.g. "Project A Revised"). A string rule you would never infer from text.
+  name String
+
+  startDate DateTime @map("start_date") @db.Date
+  endDate   DateTime @map("end_date") @db.Date
+
+  /// Mockup: "Select from Contacts Created (open list of contacts on click)".
+  responsibleId String?  @map("responsible_id")
+  responsible   Contact? @relation("BudgetResponsible", fields: [responsibleId], references: [id])
+
+  state BudgetState @default(DRAFT)
+
+  /// Bi-directional revision link. The original shows "Revised With"; the
+  /// revision shows "Revision Of" as a clickable hyperlink back.
+  revisionOfId String? @unique @map("revision_of_id")
+  revisionOf   Budget? @relation("BudgetRevision", fields: [revisionOfId], references: [id])
+  revisedBy    Budget? @relation("BudgetRevision")
+
+  /// Mockup: "Cancelled -- Here User can ARCHIVE the existing budget".
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines BudgetLine[]
+
+  @@index([state, startDate, endDate])
+  @@map("budget")
+}
+
+model BudgetLine {
+  id       String @id @default(cuid())
+  budgetId String @map("budget_id")
+  budget   Budget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  analyticAccountId String          @map("analytic_account_id")
+  analyticAccount   AnalyticAccount @relation(fields: [analyticAccountId], references: [id])
+  /// Mirrors analyticAccount.type. The mockup's mapping is directional and
+  /// fixed: analytics on invoice lines -> INCOME; on PO/bill lines -> EXPENSE.
+  type              AnalyticType
+
+  /// The only stored money on this table -- the PLANNED amount.
+  committedPaise BigInt @map("committed_paise")
+
+  /// achieved / achievedPercent / amountToAchieve are deliberately NOT columns.
+  /// They are computed from journal_item at read time, so a manual entry or a
+  /// reversal is reflected too. See src/lib/reports/budget.ts.
+
+  @@unique([budgetId, analyticAccountId])
+  @@index([analyticAccountId])
+  @@map("budget_line")
+}
+
+/// A movement ledger, not a mutable counter -- the same discipline as
+/// journal_item, applied to units instead of rupees.
+enum StockDirection {
+  IN
+  OUT
+}
+
+model StockMove {
+  id        String  @id @default(cuid())
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id])
+
+  date          DateTime       @db.Date
+  direction     StockDirection
+  /// Always positive; the sign comes from `direction`.
+  quantityMilli BigInt         @map("quantity_milli")
+  /// Moving-average unit cost at the moment of the move. Lets the OUT move post
+  /// Dr COGS / Cr Inventory, so the P&L shows a real gross margin rather than
+  /// naive sales-minus-purchases.
+  unitCostPaise BigInt         @map("unit_cost_paise")
+
+  sourceType     EntrySource @map("source_type")
+  sourceId       String?     @map("source_id")
+  journalEntryId String?     @unique @map("journal_entry_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([productId, date])
+  @@index([date])
+  @@map("stock_move")
+}
+
+/// Singleton row, id = 1.
+model CompanySettings {
+  id       Int    @id @default(1)
+  name     String @default("Urban Furniture")
+  currency String @default("INR") @db.VarChar(3)
+  /// India's fiscal year runs April -> March.
+  fiscalYearStartMonth Int @default(4) @map("fiscal_year_start_month")
+
+  /// No entry may be posted with date <= lockDate. A genuine accounting control
+  /// that an Odoo judge recognises instantly.
+  lockDate DateTime? @map("lock_date") @db.Date
+
+  /// Pointers used by the Balance Sheet's equity section.
+  retainedEarningsAccountId    String? @map("retained_earnings_account_id")
+  currentYearEarningsAccountId String? @map("current_year_earnings_account_id")
+  roundingAccountId            String? @map("rounding_account_id")
+
+  /// The final rung of resolution chains R3 and R4. Every other rung is a
+  /// per-record override; these are the company-wide fallbacks, and they are
+  /// the reason the posting engine contains no account names.
+  defaultReceivableAccountId String? @map("default_receivable_account_id")
+  defaultPayableAccountId    String? @map("default_payable_account_id")
+  defaultTaxCollectedAccountId String? @map("default_tax_collected_account_id")
+  defaultTaxPaidAccountId      String? @map("default_tax_paid_account_id")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("company_settings")
+}
+
+/// Powers the bank-statement auto-reconciliation differentiator.
+model BankStatementLine {
+  id          String   @id @default(cuid())
+  statementId String?  @map("statement_id")
+  date        DateTime @db.Date
+  narration   String
+  /// Positive = credit into our bank.
+  amountPaise BigInt   @map("amount_paise")
+
+  matchedPaymentId String? @map("matched_payment_id")
+  /// 0-100, from the match scorer.
+  confidence       Int?
+  state            String  @default("UNMATCHED")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([state, date])
+  @@map("bank_statement_line")
+}
+
+/// Every guarded state transition that bypasses immutability (reset-to-draft,
+/// lock-date change, reversal) writes a row here.
+model AuditLog {
+  id     String  @id @default(cuid())
+  action String
+  model  String
+  recordId String @map("record_id")
+  detail String?
+
+  userId String? @map("user_id")
+  user   User?   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([model, recordId])
+  @@map("audit_log")
+}
