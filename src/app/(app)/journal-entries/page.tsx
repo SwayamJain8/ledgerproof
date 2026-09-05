@@ -6,6 +6,7 @@ import { formatDate } from "@/lib/app-context";
 import { Money } from "@/components/ui/money";
 import {
   Badge,
+  ButtonLink,
   EmptyState,
   PageHeader,
   Panel,
@@ -60,6 +61,7 @@ export default async function JournalEntriesPage({
         eyebrow="Accounting"
         title="Journal Entries"
         description="The ledger itself. Every confirmed invoice, bill and payment appears here as a balanced entry — there is no other way for a number to enter the books."
+        actions={<ButtonLink href="/journal-entries/new" variant="primary">New journal entry</ButtonLink>}
       />
 
       {/* Journal filter, as tabs rather than a dropdown: there are only five. */}

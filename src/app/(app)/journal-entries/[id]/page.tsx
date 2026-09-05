@@ -17,6 +17,7 @@ import {
   Th,
 } from "@/components/ui/primitives";
 import { ExplainPanel, type TraceRow } from "./explain-panel";
+import { ReverseButton } from "./reverse-button";
 
 export const dynamic = "force-dynamic";
 
@@ -87,11 +88,16 @@ export default async function JournalEntryPage({ params }: { params: Promise<{ i
             {entry.reversedBy ? <Badge tone="unpaid">Reversed</Badge> : null}
           </div>
         </div>
-        {sourceHref ? (
-          <ButtonLink href={sourceHref} className="no-print">
-            Open source document
-          </ButtonLink>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2 no-print">
+          {sourceHref ? (
+            <ButtonLink href={sourceHref}>Open source document</ButtonLink>
+          ) : null}
+          {/* Only a live entry can be cancelled: not one that is already a
+              reversal, and not one that has already been reversed once. */}
+          {entry.state === "POSTED" && !entry.reversalOf && !entry.reversedBy ? (
+            <ReverseButton entryId={entry.id} />
+          ) : null}
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">

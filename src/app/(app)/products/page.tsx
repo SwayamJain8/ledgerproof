@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { prisma } from "@/lib/db";
 import { Money } from "@/components/ui/money";
-import { Badge, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
+import { Badge, ButtonLink, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
 import { KanbanCard, KanbanGrid, ViewRoot, ViewSwitch } from "@/components/ui/view-switch";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +36,14 @@ export default async function ProductsPage() {
         eyebrow="Master data"
         title="Products"
         description="Each product may name its own income and expense accounts — rung 2 of chains R1 and R2. Where it does not, the category is tried next, and then the journal default."
-        actions={<ViewSwitch storageKey="products" />}
+        actions={
+          <>
+            <ViewSwitch storageKey="products" />
+            <ButtonLink href="/products/new" variant="primary">
+              New product
+            </ButtonLink>
+          </>
+        }
       />
 
       <div className="space-y-4">

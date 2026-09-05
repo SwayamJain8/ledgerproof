@@ -2,6 +2,7 @@ import type { Tx } from "@/lib/db";
 import type { EntrySource, JournalType } from "@/generated/prisma/enums";
 import type { JournalModel as Journal } from "@/generated/prisma/models";
 import { PostingError, UnbalancedEntryError } from "./errors";
+import { sealEntry } from "./chain";
 import { atUtcMidnight } from "./dates";
 import { taxOnLinePaise } from "@/lib/money";
 import {
@@ -276,6 +277,11 @@ export async function writePostedEntry(tx: Tx, input: WriteEntryInput) {
       taxId: line.taxId ?? null,
     })),
   });
+
+  // Seal it onto the hash chain. Must be after the items exist -- they are part
+  // of what is hashed -- and inside this transaction, so a rolled-back post
+  // leaves no gap in the chain.
+  await sealEntry(tx, entry.id);
 
   return entry;
 }
@@ -568,7 +574,7 @@ export async function postManualEntry(tx: Tx, entryId: string, postedById?: stri
     data: { state: "POSTED" },
   });
 
-  return tx.journalEntry.update({
+  const posted = await tx.journalEntry.update({
     where: { id: entryId },
     data: {
       state: "POSTED",
@@ -578,6 +584,9 @@ export async function postManualEntry(tx: Tx, entryId: string, postedById?: stri
       postedById: postedById ?? null,
     },
   });
+
+  await sealEntry(tx, posted.id);
+  return posted;
 }
 
 /**
@@ -587,6 +596,47 @@ export async function postManualEntry(tx: Tx, entryId: string, postedById?: stri
  *
  * There is no Edit and no Delete. `journal_item_is_append_only` makes sure of it.
  */
+
+/**
+ * Residual recomputation, kept here rather than imported from documents.ts.
+ *
+ * documents.ts already imports the posting functions from this file, so
+ * importing back the other way would make the two modules circular. The rule is
+ * identical: residual = total - the sum of CONFIRMED allocations, and the badge
+ * follows the residual because `invoice_payment_state_correct` insists on it.
+ */
+function badgeFor(totalPaise: bigint, residualPaise: bigint) {
+  if (residualPaise === 0n) return "PAID" as const;
+  if (residualPaise === totalPaise) return "NOT_PAID" as const;
+  return "PARTIAL" as const;
+}
+
+async function restoreInvoiceResidual(tx: Tx, invoiceId: string) {
+  const invoice = await tx.customerInvoice.findUniqueOrThrow({ where: { id: invoiceId } });
+  const agg = await tx.paymentAllocation.aggregate({
+    where: { customerInvoiceId: invoiceId, payment: { state: "CONFIRMED" } },
+    _sum: { amountPaise: true },
+  });
+  const residualPaise = invoice.totalPaise - (agg._sum.amountPaise ?? 0n);
+  await tx.customerInvoice.update({
+    where: { id: invoiceId },
+    data: { residualPaise, paymentState: badgeFor(invoice.totalPaise, residualPaise) },
+  });
+}
+
+async function restoreBillResidual(tx: Tx, billId: string) {
+  const bill = await tx.vendorBill.findUniqueOrThrow({ where: { id: billId } });
+  const agg = await tx.paymentAllocation.aggregate({
+    where: { vendorBillId: billId, payment: { state: "CONFIRMED" } },
+    _sum: { amountPaise: true },
+  });
+  const residualPaise = bill.totalPaise - (agg._sum.amountPaise ?? 0n);
+  await tx.vendorBill.update({
+    where: { id: billId },
+    data: { residualPaise, paymentState: badgeFor(bill.totalPaise, residualPaise) },
+  });
+}
+
 export async function reverseEntry(
   tx: Tx,
   entryId: string,
@@ -633,6 +683,53 @@ export async function reverseEntry(
     where: { id: entry.id },
     data: { reversalOfId: original.id },
   });
+
+  // ── Cancel the source document too ──────────────────────────────────────
+  //
+  // Reversing only the ledger half leaves the books lying to themselves: the
+  // Debtors account no longer carries the invoice, but the invoice still sits
+  // on the open list demanding payment. The two would disagree, which the
+  // "open invoices equal the Debtors control account" check catches on sight.
+  //
+  // The document keeps its figures. It just stops being OPEN -- and because
+  // `invoice_payment_state_correct` ties the badge to the residual, zeroing
+  // the residual instead would print "PAID" on a cancelled invoice.
+  if (original.sourceId) {
+    if (original.sourceType === "CUSTOMER_INVOICE") {
+      const settled = await tx.paymentAllocation.count({
+        where: { customerInvoiceId: original.sourceId, payment: { state: "CONFIRMED" } },
+      });
+      // Money has already changed hands against it -- cancel the payment first,
+      // or the cash would have nowhere to sit.
+      if (settled > 0) throw new PostingError("OVER_ALLOCATION", { reason: "invoice has payments", entryId });
+      await tx.customerInvoice.update({ where: { id: original.sourceId }, data: { state: "CANCELLED" } });
+    }
+
+    if (original.sourceType === "VENDOR_BILL") {
+      const settled = await tx.paymentAllocation.count({
+        where: { vendorBillId: original.sourceId, payment: { state: "CONFIRMED" } },
+      });
+      if (settled > 0) throw new PostingError("OVER_ALLOCATION", { reason: "bill has payments", entryId });
+      await tx.vendorBill.update({ where: { id: original.sourceId }, data: { state: "CANCELLED" } });
+    }
+
+    // Cancelling a payment gives the money back to the documents it settled,
+    // so their residuals have to be recomputed from what is left.
+    if (original.sourceType === "PAYMENT") {
+      const allocations = await tx.paymentAllocation.findMany({
+        where: { paymentId: original.sourceId },
+      });
+      await tx.paymentAllocation.deleteMany({ where: { paymentId: original.sourceId } });
+      await tx.payment.update({
+        where: { id: original.sourceId },
+        data: { state: "CANCELLED", allocatedPaise: 0n },
+      });
+      for (const a of allocations) {
+        if (a.customerInvoiceId) await restoreInvoiceResidual(tx, a.customerInvoiceId);
+        if (a.vendorBillId) await restoreBillResidual(tx, a.vendorBillId);
+      }
+    }
+  }
 
   return entry;
 }

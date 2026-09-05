@@ -5,7 +5,7 @@ import { prisma, type Tx } from "../src/lib/db";
 import { accountingDate } from "../src/lib/accounting/dates";
 import { lineSubtotalPaise, rupeesToPaise, qtyToMilli, formatINR } from "../src/lib/money";
 import { documentTotals, confirmCustomerInvoice, confirmVendorBill, confirmPayment } from "../src/lib/accounting/documents";
-import { postManualLines } from "../src/lib/accounting/posting";
+import { postManualLines, reverseEntry } from "../src/lib/accounting/posting";
 import { allocateDocumentNumber, SEQUENCE_CODES } from "../src/lib/accounting/sequence";
 import {
   confirmPurchaseOrder,
@@ -29,7 +29,7 @@ import {
  * THE STORY, in order:
  *
  *   1. 01-Apr  Owner puts Rs 5,00,000 into the business (4,50,000 bank + 50,000 cash)
- *   2. 10-Apr  PO0001 to Azure for 20 tables; only 10 are delivered and billed
+ *   2. 10-Apr  PO0001 to Azure for 12 tables; only 10 are delivered and billed
  *   3. 20-Apr  Azure's bill paid in full, by bank
  *   4. 05-May  BILL/2026/0002 from Open Wood, raised WITHOUT a PO -- still unpaid
  *   5. 12-May  SO0001 for Nimesh becomes INV/2026/0001
@@ -40,7 +40,7 @@ import {
  *  10. 31-Jul  Showroom rent Rs 20,000, paid in cash, as a manual entry
  *
  * TWO THINGS ARE LEFT DELIBERATELY UNFINISHED so they can be done live:
- *   - PO0001 still has 10 tables unbilled  -> demo the PO -> Bill conversion
+ *   - PO0001 still has 2 tables unbilled   -> demo the PO -> Bill conversion
  *   - SO0002 (Joey, 3 tables) is not invoiced -> demo the SO -> Invoice conversion
  *
  * WHERE THE BOOKS LAND on 31-Jul-2026:
@@ -445,16 +445,17 @@ async function postExpense(
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function seedTransactions(ctx: Ctx) {
-  // ── 1. Opening capital ────────────────────────────────────────────────────
-  //    Without this the Balance Sheet has an empty Capital row and the business
-  //    has nothing to trade with. Posted as a real manual journal entry, which
-  //    is also the screen a judge is most likely to test.
+  // ── 1 Apr · The owner starts the business ─────────────────────────────────
+  //    Rs 5,00,000 of his own money: most into the bank, a float kept as cash.
+  //    Posted by hand, because there is no document for "the owner put money
+  //    in" -- and it is the entry that proves reports are not summed off the
+  //    invoice tables.
   await prisma.$transaction(async (tx) => {
     const name = await allocateDocumentNumber(tx as Tx, SEQUENCE_CODES.MANUAL_ENTRY, FY_START);
-    const bankJournal = await tx.journal.findFirstOrThrow({ where: { type: "BANK" } });
+    const bank = await tx.journal.findFirstOrThrow({ where: { type: "BANK" } });
     await postManualLines(tx as Tx, {
       name,
-      journalId: bankJournal.id,
+      journalId: bank.id,
       date: FY_START,
       ref: "Owner capital introduced",
       lines: [
@@ -465,15 +466,16 @@ async function seedTransactions(ctx: Ctx) {
     });
   });
 
-  // ── 2. PO0001, billed in part ─────────────────────────────────────────────
-  //    20 tables ordered, 10 delivered. The other 10 stay billable so the
-  //    PO -> Bill conversion can be demonstrated live against real data.
+  // ── 10 Apr · Orders display stock ─────────────────────────────────────────
+  //    12 tables ordered. An order is a promise, not a transaction: it posts
+  //    nothing. Two of the twelve are still undelivered at the end of this
+  //    story, so the PO -> Bill conversion can be demonstrated live.
   const po = await prisma.purchaseOrder.create({
     data: {
       name: "DRAFT-PO-0001",
       vendorId: ctx.contactByName.get("Azure Furniture")!.id,
       orderDate: accountingDate("2026-04-10"),
-      notes: "Showroom display tables. Delivery in two lots.",
+      notes: "Showroom display tables. Supplier delivering in two lots.",
       lines: {
         create: [
           {
@@ -481,10 +483,10 @@ async function seedTransactions(ctx: Ctx) {
             productId: ctx.productByName.get("Wooden Table")!.id,
             description: "Wooden Table",
             analyticAccountId: ctx.analyticByName.get("Showroom Fitout")!.id,
-            quantityMilli: qtyToMilli(20),
+            quantityMilli: qtyToMilli(12),
             unitPricePaise: rupeesToPaise(6000),
             taxId: ctx.gst.id,
-            subtotalPaise: lineSubtotalPaise(qtyToMilli(20), rupeesToPaise(6000)),
+            subtotalPaise: lineSubtotalPaise(qtyToMilli(12), rupeesToPaise(6000)),
           },
         ],
       },
@@ -492,10 +494,11 @@ async function seedTransactions(ctx: Ctx) {
   });
   await prisma.$transaction((tx) => confirmPurchaseOrder(tx as Tx, po.id));
 
-  // Convert, then trim the draft to the 10 that actually arrived.
+  // ── 18 Apr · Only 10 tables arrive, so only 10 are billed ─────────────────
+  //    10 x 6,000 = 60,000, GST 18% = 10,800, payable 70,800.
   const azureBill = await prisma.$transaction(async (tx) => {
     const draft = await createBillFromPurchaseOrder(tx as Tx, po.id, {
-      billDate: accountingDate("2026-04-10"),
+      billDate: accountingDate("2026-04-18"),
       billReference: "AZ-26-114",
     });
     const line = await tx.vendorBillLine.findFirstOrThrow({ where: { billId: draft.id } });
@@ -510,20 +513,21 @@ async function seedTransactions(ctx: Ctx) {
   });
   await prisma.$transaction((tx) => confirmVendorBill(tx as Tx, azureBill.id));
 
-  // ── 3. Azure paid in full, by bank ────────────────────────────────────────
+  // ── 25 Apr · Azure paid in full, by bank ──────────────────────────────────
   await pay(ctx, {
     partner: "Azure Furniture",
-    date: "2026-04-20",
+    date: "2026-04-25",
     direction: "SEND",
     method: "BANK",
     amountRupees: 70800,
     billId: azureBill.id,
-    note: "Payment against AZ-26-114",
+    note: "NEFT against AZ-26-114",
   });
 
-  // ── 4. A bill raised WITHOUT a purchase order ─────────────────────────────
-  //    This is the one that keeps the PO smart button hidden, and the one that
-  //    leaves Creditors non-zero on the Balance Sheet.
+  // ── 5 May · Chairs bought off the shelf, with no purchase order ───────────
+  //    20 x 1,000 = 20,000, GST 3,600, payable 23,600. Left UNPAID, so the
+  //    Balance Sheet has a real Creditors figure -- and because there is no PO
+  //    behind it, the PO smart button stays hidden on this bill.
   await createAndConfirmBill(ctx, {
     vendor: "Open Wood",
     date: "2026-05-05",
@@ -534,7 +538,10 @@ async function seedTransactions(ctx: Ctx) {
     ],
   });
 
-  // ── 5. SO0001 becomes INV/2026/0001 ───────────────────────────────────────
+  // ── 12 May · First sale, from a quotation ─────────────────────────────────
+  //    Two lines, and deliberately so: 5 tables at 10,000 plus 2,000 of
+  //    delivery. Tax is worked out per line -- 9,000 on the goods, 360 on the
+  //    delivery -- and then added up. 52,000 + 9,360 = 61,360.
   const so1 = await prisma.salesOrder.create({
     data: {
       name: "DRAFT-SO-0001",
@@ -552,6 +559,16 @@ async function seedTransactions(ctx: Ctx) {
             taxId: ctx.gst.id,
             subtotalPaise: lineSubtotalPaise(qtyToMilli(5), rupeesToPaise(10000)),
           },
+          {
+            lineNo: 2,
+            productId: ctx.productByName.get("Delivery Charge")!.id,
+            description: "Delivery to Ahmedabad",
+            analyticAccountId: ctx.analyticByName.get("Retail Sales")!.id,
+            quantityMilli: qtyToMilli(1),
+            unitPricePaise: rupeesToPaise(2000),
+            taxId: ctx.gst.id,
+            subtotalPaise: lineSubtotalPaise(qtyToMilli(1), rupeesToPaise(2000)),
+          },
         ],
       },
     },
@@ -566,18 +583,20 @@ async function seedTransactions(ctx: Ctx) {
   );
   await prisma.$transaction((tx) => confirmCustomerInvoice(tx as Tx, nimeshInvoice.id));
 
-  // ── 6. Nimesh pays it in full ─────────────────────────────────────────────
+  // ── 25 May · Nimesh pays in full ──────────────────────────────────────────
   await pay(ctx, {
     partner: "Nimesh Pathak",
     date: "2026-05-25",
     direction: "RECEIVE",
     method: "BANK",
-    amountRupees: 59000,
+    amountRupees: 61360,
     invoiceId: nimeshInvoice.id,
-    note: "Receipt against INV/2026/0001",
+    note: "NEFT against INV/2026/0001",
   });
 
-  // ── 7. An invoice raised WITHOUT a sales order ────────────────────────────
+  // ── 10 Jun · A walk-in sale, invoiced directly ────────────────────────────
+  //    No sales order behind it, so the SO smart button is absent here.
+  //    2 x 30,000 = 60,000, GST 10,800, total 70,800.
   const joeyInvoice = await createAndConfirmInvoice(ctx, {
     customer: "Joey Wills",
     date: "2026-06-10",
@@ -588,7 +607,7 @@ async function seedTransactions(ctx: Ctx) {
     ],
   });
 
-  // ── 8. ...paid only in part. Residual 40,800, badge reads PARTIAL. ─────────
+  // ── 28 Jun · Joey pays part of it by bank ─────────────────────────────────
   await pay(ctx, {
     partner: "Joey Wills",
     date: "2026-06-28",
@@ -599,9 +618,24 @@ async function seedTransactions(ctx: Ctx) {
     note: "Part payment against INV/2026/0002",
   });
 
-  // ── 9. An invoice left completely open ────────────────────────────────────
-  //    The bank statement settles this one during the reconciliation demo, so
-  //    leave it untouched.
+  // ── 15 Jul · ...and some more of it in cash ───────────────────────────────
+  //    ONE invoice settled by TWO payments, through two different journals.
+  //    This is why payments and documents are a many-to-many with the amount
+  //    on the link: a paid/unpaid flag could not express it.
+  //    70,800 - 30,000 - 10,000 leaves 30,800 outstanding.
+  await pay(ctx, {
+    partner: "Joey Wills",
+    date: "2026-07-15",
+    direction: "RECEIVE",
+    method: "CASH",
+    amountRupees: 10000,
+    invoiceId: joeyInvoice.id,
+    note: "Cash received at the showroom",
+  });
+
+  // ── 5 Jul · A sale still awaiting payment ─────────────────────────────────
+  //    10 x 2,000 = 20,000, GST 3,600, total 23,600. Left open on purpose:
+  //    this is the one the bank statement settles in the reconciliation demo.
   await createAndConfirmInvoice(ctx, {
     customer: "Nimesh Pathak",
     date: "2026-07-05",
@@ -612,24 +646,45 @@ async function seedTransactions(ctx: Ctx) {
     ],
   });
 
-  // ── 10. Showroom rent, in cash ────────────────────────────────────────────
-  //     The only Other Expense in the books, so that P&L row has exactly one
-  //     thing in it and is easy to point at.
+  // ── 20 Jul · A mistake, and how it is undone ──────────────────────────────
+  //    An invoice raised against the wrong customer. In this system it cannot
+  //    be edited and cannot be deleted -- it is cancelled by posting its mirror
+  //    image. Both entries stay in the books forever, the net effect on every
+  //    report is zero, and anyone reading the ledger can see what happened.
+  const mistake = await createAndConfirmInvoice(ctx, {
+    customer: "Joey Wills",
+    date: "2026-07-20",
+    dueDays: 30,
+    reference: "RAISED IN ERROR",
+    lines: [
+      { productName: "Sofa Set", qty: 1, unitPriceRupees: 30000, analyticName: "Retail Sales" },
+    ],
+  });
+  const mistakeEntry = await prisma.journalEntry.findFirstOrThrow({
+    where: { sourceType: "CUSTOMER_INVOICE", sourceId: mistake.id },
+  });
+  await prisma.$transaction((tx) =>
+    reverseEntry(tx as Tx, mistakeEntry.id, { date: accountingDate("2026-07-20") }),
+  );
+
+  // ── 31 Jul · The month's rent, in cash ────────────────────────────────────
+  //    The only Other Expense in the books, so that P&L row has exactly one
+  //    thing in it and is easy to point at.
   await postExpense(ctx, {
     date: "2026-07-31",
     amountRupees: 20000,
     method: "CASH",
-    label: "Showroom rent",
+    label: "Showroom rent for July",
   });
 
-  // ── Left unfinished on purpose: SO0002 ────────────────────────────────────
+  // ── Left open on purpose · SO0002 ─────────────────────────────────────────
   //    Confirmed, never invoiced. Convert it live to show SO -> Invoice.
   const so2 = await prisma.salesOrder.create({
     data: {
       name: "DRAFT-SO-0002",
       customerId: ctx.contactByName.get("Joey Wills")!.id,
-      orderDate: accountingDate("2026-07-20"),
-      notes: "Awaiting delivery slot. Invoice on dispatch.",
+      orderDate: accountingDate("2026-07-28"),
+      notes: "Awaiting a delivery slot. Invoice on dispatch.",
       lines: {
         create: [
           {

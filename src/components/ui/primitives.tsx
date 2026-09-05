@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
 
 import { cn } from "./cn";
+import { ClickableRow } from "./clickable-row";
 
 /* ─────────────────────────────────────────────────────────────────────────
    Panel — the ruled box everything sits in. Hairline borders, no shadows.
@@ -218,7 +219,19 @@ export function Td({
   );
 }
 
-/** A table row that navigates. Whole-row targets beat a tiny link per row. */
+/**
+ * A table row that navigates.
+ *
+ * Implemented with a click handler rather than a stretched anchor. The obvious
+ * version — `<Link className="absolute inset-0">` inside a cell — has no
+ * positioned ancestor to stretch against, so it sizes itself against the page
+ * and covers the entire screen with one invisible link. Giving the `<tr>`
+ * `position: relative` fixes that in most browsers but is quirky enough on
+ * table rows that it is not worth the risk on a screen someone is demoing.
+ *
+ * Clicks that land on something interactive inside the row are left alone, so
+ * a button in a cell still does its own job.
+ */
 export function LinkRow({
   href,
   className,
@@ -229,13 +242,9 @@ export function LinkRow({
   children: ReactNode;
 }) {
   return (
-    <tr className={cn("group cursor-pointer transition-colors hover:bg-surface-2", className)}>
-      <td className="hidden" />
+    <ClickableRow href={href} className={className}>
       {children}
-      <td className="w-0 border-b border-rule p-0">
-        <Link href={href} className="absolute inset-0" aria-label="Open" />
-      </td>
-    </tr>
+    </ClickableRow>
   );
 }
 

@@ -49,9 +49,12 @@ export default async function BudgetsPage({
         title="Budgets"
         description="Planned spend per analytic account over a period. Achieved is never stored — it is summed live from posted journal items carrying the tag."
         actions={
-          <ButtonLink href="/reports/budget" variant="primary">
-            Budget vs Actual
-          </ButtonLink>
+          <>
+            <ButtonLink href="/reports/budget">Budget vs Actual</ButtonLink>
+            <ButtonLink href="/budgets/new" variant="primary">
+              New budget
+            </ButtonLink>
+          </>
         }
       />
 

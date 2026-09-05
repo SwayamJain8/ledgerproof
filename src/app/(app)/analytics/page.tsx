@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { prisma } from "@/lib/db";
 import { Money } from "@/components/ui/money";
-import { Badge, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
+import { Badge, ButtonLink, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
 import { KanbanCard, KanbanGrid, ViewRoot, ViewSwitch } from "@/components/ui/view-switch";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +23,14 @@ export default async function AnalyticsPage() {
         eyebrow="Master data"
         title="Analytic Accounts"
         description="A second dimension on top of the chart of accounts — projects, departments, campaigns. The tag is carried down onto every journal item, which is what lets budget actuals be summed from the ledger rather than from invoices."
-        actions={<ViewSwitch storageKey="analytics" />}
+        actions={
+          <>
+            <ViewSwitch storageKey="analytics" />
+            <ButtonLink href="/analytics/new" variant="primary">
+              New analytic account
+            </ButtonLink>
+          </>
+        }
       />
 
       <ViewRoot

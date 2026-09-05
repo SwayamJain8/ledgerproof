@@ -5,6 +5,9 @@ import { redirect } from "next/navigation";
 
 import { prisma } from "@/lib/db";
 import { requireSession } from "@/lib/auth/session";
+import { accountingDate } from "@/lib/accounting/dates";
+import { rupeesToPaise } from "@/lib/money";
+import { z } from "zod";
 
 const BACK = "/budgets";
 
@@ -100,6 +103,73 @@ export async function cancelBudgetAction(formData: FormData) {
   await prisma.budget.update({
     where: { id },
     data: { state: "CANCELLED", active: false },
+  });
+
+  revalidatePath(BACK);
+  redirect(BACK);
+}
+
+const createSchema = z.object({
+  name: z.string().trim().min(1, "Give the budget a name."),
+  startDate: z.string().min(1),
+  endDate: z.string().min(1),
+  responsibleId: z.string().optional(),
+  analyticAccountId: z.string().min(1, "Choose an analytic account to budget against."),
+  committed: z.string().regex(/^\d+(\.\d{1,2})?$/, "Enter a planned amount."),
+});
+
+export interface BudgetFormState {
+  error?: string;
+}
+
+/**
+ * Create a budget with its first line.
+ *
+ * Only the PLANNED amount is stored. Achieved, achieved-percent and
+ * amount-to-achieve are never columns — they are summed from journal items
+ * carrying the analytic tag at read time, which is why a manual entry or a
+ * reversal moves them too.
+ */
+export async function createBudgetAction(
+  _prev: BudgetFormState,
+  formData: FormData,
+): Promise<BudgetFormState> {
+  await requireSession();
+
+  const parsed = createSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Check the form and try again." };
+  }
+  const d = parsed.data;
+
+  const start = accountingDate(d.startDate);
+  const end = accountingDate(d.endDate);
+  if (end < start) return { error: "The end date cannot be before the start date." };
+
+  const analytic = await prisma.analyticAccount.findUnique({
+    where: { id: d.analyticAccountId },
+  });
+  if (!analytic) return { error: "That analytic account no longer exists." };
+
+  await prisma.budget.create({
+    data: {
+      name: d.name,
+      startDate: start,
+      endDate: end,
+      responsibleId: d.responsibleId || null,
+      state: "DRAFT",
+      lines: {
+        create: [
+          {
+            analyticAccountId: analytic.id,
+            // Mirrors the analytic's own direction, which is what decides
+            // whether achievement is read from invoices or from bills.
+            type: analytic.type,
+            committedPaise: rupeesToPaise(d.committed),
+          },
+        ],
+      },
+    },
   });
 
   revalidatePath(BACK);

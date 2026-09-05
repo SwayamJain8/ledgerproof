@@ -19,7 +19,9 @@
     "check:orders": "tsx scripts/check-orders.ts",
     "check:reconcile": "tsx scripts/check-reconcile.ts",
     "check:reconcile:e2e": "tsx scripts/check-reconcile-e2e.ts",
-    "check:budget": "tsx scripts/check-budget-revision.ts"
+    "check:budget": "tsx scripts/check-budget-revision.ts",
+    "check:chain": "tsx scripts/check-chain.ts",
+    "seed:empty": "tsx prisma/seed-empty.ts"
   },
   "allowScripts": {
     "@prisma/engines": true,

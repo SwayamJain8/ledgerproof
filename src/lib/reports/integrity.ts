@@ -1,5 +1,6 @@
 import type { Tx } from "@/lib/db";
 import { paymentStateFor } from "@/lib/accounting/documents";
+import { verifyChain } from "@/lib/accounting/chain";
 import { accountBalances, trialBalance } from "./ledger";
 import { balanceSheet } from "./balance-sheet";
 import { profitAndLoss } from "./profit-loss";
@@ -218,6 +219,31 @@ export async function runIntegrityChecks(tx: Tx, asOf: Date): Promise<IntegrityR
       "Two reports computed separately from the same ledger. If they disagree, one of them is inventing a number.",
     passed: (cye?.amountPaise ?? -1n) === pl.netIncomePaise,
     evidence: `P&L net income ${inr(pl.netIncomePaise)} against Balance Sheet current year earnings ${inr(cye?.amountPaise ?? 0n)}.`,
+  });
+
+  // ── The tamper-evident seal ─────────────────────────────────────────────
+  const chain = await verifyChain(tx);
+  add({
+    id: "chain-intact",
+    group: "Tamper evidence",
+    title: "The hash chain is unbroken",
+    rationale:
+      "Each posted entry is sealed with sha256(previous hash + its own contents), so every entry commits to the whole history before it. Editing one row in the database — with the application bypassed entirely — breaks every hash from that row onwards.",
+    passed: chain.valid,
+    evidence: chain.valid
+      ? `${chain.checked} entries re-hashed and every seal matched.`
+      : `Chain breaks at entry #${chain.brokenAt?.chainIndex} (${chain.brokenAt?.name}): ${
+          chain.brokenAt?.reason === "HASH_MISMATCH" ? "its contents no longer match its seal" : "it does not link to the entry before it"
+        }.`,
+  });
+  add({
+    id: "chain-complete",
+    group: "Tamper evidence",
+    title: "Every posted entry is sealed",
+    rationale:
+      "An entry with no seal is an entry outside the chain, which is exactly where someone would try to hide one.",
+    passed: chain.unsealed === 0,
+    evidence: `${chain.unsealed} posted entries carry no hash.`,
   });
 
   return {

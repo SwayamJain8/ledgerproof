@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { prisma } from "@/lib/db";
 import { Money } from "@/components/ui/money";
-import { Badge, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
+import { Badge, ButtonLink, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
 import { KanbanCard, KanbanGrid, ViewRoot, ViewSwitch } from "@/components/ui/view-switch";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +27,14 @@ export default async function ContactsPage() {
         eyebrow="Master data"
         title="Contacts"
         description="Customers and vendors. A contact may carry its own receivable or payable account — rung 1 of resolution chain R4. Leave them blank and the company default applies."
-        actions={<ViewSwitch storageKey="contacts" />}
+        actions={
+          <>
+            <ViewSwitch storageKey="contacts" />
+            <ButtonLink href="/contacts/new" variant="primary">
+              New contact
+            </ButtonLink>
+          </>
+        }
       />
 
       <ViewRoot

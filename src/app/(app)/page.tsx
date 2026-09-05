@@ -6,6 +6,7 @@ import { accountBalances } from "@/lib/reports/ledger";
 import { profitAndLoss } from "@/lib/reports/profit-loss";
 import { budgetActuals } from "@/lib/reports/budget";
 import { currentFiscalYear, formatDate, formatDateShort, today } from "@/lib/app-context";
+import { formatINR } from "@/lib/money";
 import { Money, Percent } from "@/components/ui/money";
 import {
   Badge,
@@ -102,6 +103,17 @@ export default async function DashboardPage() {
   const receivable = sumOf((_, subtype) => subtype === "RECEIVABLE");
   const payable = sumOf((_, subtype) => subtype === "PAYABLE");
 
+  // Counts rather than bare figures: "Rs 64,400" means nothing on its own,
+  // "Rs 64,400 across 2 unpaid invoices" is a sentence a stranger understands.
+  const [openInvoiceCount, openBillCount] = await Promise.all([
+    prisma.customerInvoice.count({ where: { state: "POSTED", residualPaise: { gt: 0 } } }),
+    prisma.vendorBill.count({ where: { state: "POSTED", residualPaise: { gt: 0 } } }),
+  ]);
+
+  // A negative net income is a real result, not an error, so say the word
+  // rather than leaving a minus sign to carry the meaning on its own.
+  const isProfit = pl.netIncomePaise >= 0n;
+
   const budgetLines = await Promise.all(budgets.map((b) => budgetActuals(prisma, b.id)));
 
   return (
@@ -122,30 +134,31 @@ export default async function DashboardPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Figure
-          label="Bank & Cash"
+          label="Money we hold"
           paise={liquid}
-          caption="Across all money journals"
+          caption="Bank and cash together"
           href="/reports/balance-sheet"
         />
         <Figure
-          label="Owed to us"
+          label="Customers owe us"
           paise={receivable}
-          caption="Debtors control account"
+          caption={`${openInvoiceCount} invoice${openInvoiceCount === 1 ? "" : "s"} not yet paid in full`}
           href="/reports/partner-ledger"
           tone="ledger"
         />
         <Figure
-          label="We owe"
+          label="We owe suppliers"
           paise={payable}
-          caption="Creditors control account"
+          caption={`${openBillCount} bill${openBillCount === 1 ? "" : "s"} not yet paid in full`}
           href="/reports/partner-ledger"
           tone="oxide"
         />
         <Figure
-          label={`Net income · ${fy.label}`}
+          label={`${isProfit ? "Profit" : "Loss"} so far · ${fy.label}`}
           paise={pl.netIncomePaise}
-          caption="Income less all expenses"
+          caption={`${formatINR(pl.income.amountPaise)} earned less ${formatINR(pl.expenses.amountPaise)} spent`}
           href="/reports/profit-loss"
+          tone={isProfit ? "ledger" : "oxide"}
         />
       </div>
 

@@ -234,24 +234,24 @@ async function auditBalanceSheet() {
   const byCode = new Map(balances.map((b) => [b.code, b]));
   const at = (code: string) => byCode.get(code)?.balancePaise ?? -1n;
 
-  expectPaise("Bank A/c", at("1100"), rupeesToPaise(468200));
-  expectPaise("Cash A/c", at("1200"), rupeesToPaise(30000));
-  expectPaise("Debtors A/c", at("1300"), rupeesToPaise(64400));
+  expectPaise("Bank A/c", at("1100"), rupeesToPaise(470560));
+  expectPaise("Cash A/c", at("1200"), rupeesToPaise(40000));
+  expectPaise("Debtors A/c", at("1300"), rupeesToPaise(54400));
   expectPaise("Input GST A/c", at("1400"), rupeesToPaise(14400));
   expectPaise("Creditors A/c", at("2100"), rupeesToPaise(23600));
-  expectPaise("Output GST A/c", at("2200"), rupeesToPaise(23400));
+  expectPaise("Output GST A/c", at("2200"), rupeesToPaise(23760));
   expectPaise("Capital A/c", at("3100"), rupeesToPaise(500000));
-  expectPaise("Total assets", bs.totalAssetsPaise, rupeesToPaise(577000));
-  expectPaise("Total liabilities + capital", bs.totalLiabilitiesPaise, rupeesToPaise(577000));
+  expectPaise("Total assets", bs.totalAssetsPaise, rupeesToPaise(579360));
+  expectPaise("Total liabilities + capital", bs.totalLiabilitiesPaise, rupeesToPaise(579360));
 }
 
 async function auditProfitAndLoss() {
   section("5. Profit & Loss, 01-Apr-2026 to 15-Sep-2026");
 
   const pl = await profitAndLoss(prisma, { from: FY_START, to: ASOF });
-  expectPaise("Income", pl.income.amountPaise, rupeesToPaise(130000));
+  expectPaise("Income", pl.income.amountPaise, rupeesToPaise(132000));
   expectPaise("Total expenses", pl.expenses.amountPaise, rupeesToPaise(100000));
-  expectPaise("Net income", pl.netIncomePaise, rupeesToPaise(30000));
+  expectPaise("Net income", pl.netIncomePaise, rupeesToPaise(32000));
 
   const purchase = pl.expenseRows.find((r) => r.label.toLowerCase().includes("purchase"));
   const other = pl.expenseRows.find((r) => r.label.toLowerCase().includes("other"));
