@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { budgetActuals } from "@/lib/reports/budget";
 import { formatDate } from "@/lib/app-context";
 import { Money, Percent } from "@/components/ui/money";
+import { FormError } from "@/components/ui/form";
+import { BudgetLifecycle } from "./budget-lifecycle";
 import {
   ButtonLink,
   EmptyState,
@@ -18,12 +20,18 @@ import {
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Budgets" };
 
-export default async function BudgetsPage() {
+export default async function BudgetsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
   const budgets = await prisma.budget.findMany({
     orderBy: { startDate: "desc" },
     include: {
       responsible: { select: { name: true } },
       revisionOf: { select: { id: true, name: true } },
+      revisedBy: { select: { id: true, name: true } },
       _count: { select: { lines: true } },
     },
   });
@@ -46,6 +54,12 @@ export default async function BudgetsPage() {
           </ButtonLink>
         }
       />
+
+      {error ? (
+        <div className="mb-4">
+          <FormError>{decodeURIComponent(error)}</FormError>
+        </div>
+      ) : null}
 
       <Panel>
         {budgets.length === 0 ? (
@@ -70,6 +84,7 @@ export default async function BudgetsPage() {
                 <Th numeric className="w-24">
                   %
                 </Th>
+                <Th className="w-44">Lifecycle</Th>
               </tr>
             </thead>
             <tbody>
@@ -85,7 +100,12 @@ export default async function BudgetsPage() {
                       {budget.name}
                       {budget.revisionOf ? (
                         <span className="ml-2 text-[11.5px] text-ink-3">
-                          revises {budget.revisionOf.name}
+                          revision of {budget.revisionOf.name}
+                        </span>
+                      ) : null}
+                      {budget.revisedBy ? (
+                        <span className="ml-2 text-[11.5px] text-ink-3">
+                          revised with {budget.revisedBy.name}
                         </span>
                       ) : null}
                     </Td>
@@ -107,6 +127,13 @@ export default async function BudgetsPage() {
                     </Td>
                     <Td numeric className={pct > 100 ? "text-oxide" : ""}>
                       <Percent value={pct} />
+                    </Td>
+                    <Td>
+                      <BudgetLifecycle
+                        budgetId={budget.id}
+                        state={budget.state}
+                        alreadyRevised={budget.revisedBy !== null}
+                      />
                     </Td>
                   </tr>
                 );

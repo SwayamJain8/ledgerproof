@@ -4,7 +4,9 @@ import { prisma } from "@/lib/db";
 import { formatDate } from "@/lib/app-context";
 import { Money } from "@/components/ui/money";
 import {
+  ButtonLink,
   EmptyState,
+  LinkRow,
   PageHeader,
   Panel,
   StateBadge,
@@ -31,6 +33,7 @@ export default async function SalesOrdersPage() {
         eyebrow="Sales"
         title="Sales Orders"
         description="A sales order records what a customer has agreed to buy. Nothing reaches the ledger until the invoice is confirmed — an order is a promise, not revenue."
+        actions={<ButtonLink href="/sales-orders/new">New sales order</ButtonLink>}
       />
 
       <Panel>
@@ -59,7 +62,7 @@ export default async function SalesOrdersPage() {
                 const invoiced = order.lines.reduce((s, l) => s + l.qtyInvoicedMilli, 0n);
                 const pct = ordered === 0n ? 0 : Number((invoiced * 100n) / ordered);
                 return (
-                  <tr key={order.id} className="transition-colors hover:bg-surface-2">
+                  <LinkRow key={order.id} href={`/sales-orders/${order.id}`}>
                     <Td className="font-medium text-ink">{order.name}</Td>
                     <Td>{order.customer.name}</Td>
                     <Td className="whitespace-nowrap text-ink-3">{formatDate(order.orderDate)}</Td>
@@ -77,7 +80,7 @@ export default async function SalesOrdersPage() {
                     <Td>
                       <StateBadge state={order.state} />
                     </Td>
-                  </tr>
+                  </LinkRow>
                 );
               })}
             </tbody>

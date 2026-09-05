@@ -42,6 +42,7 @@ export const NAV: NavSection[] = [
     label: "Accounting",
     items: [
       { href: "/journal-entries", label: "Journal Entries" },
+      { href: "/reconcile", label: "Bank Reconciliation" },
       { href: "/accounts", label: "Chart of Accounts" },
       { href: "/journals", label: "Journals" },
       { href: "/taxes", label: "Taxes" },

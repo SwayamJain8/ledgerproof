@@ -45,9 +45,7 @@ export async function createBillAction(
   _prev: DocFormState,
   formData: FormData,
 ): Promise<DocFormState> {
-  console.error("[DIAG] createBillAction: entered");
   await requireSession();
-  console.error("[DIAG] createBillAction: session ok");
 
   const parsed = createSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {

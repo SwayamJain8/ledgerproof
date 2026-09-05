@@ -7,24 +7,51 @@ import { lineSubtotalPaise, rupeesToPaise, qtyToMilli, formatINR } from "../src/
 import { documentTotals, confirmCustomerInvoice, confirmVendorBill, confirmPayment } from "../src/lib/accounting/documents";
 import { postManualLines } from "../src/lib/accounting/posting";
 import { allocateDocumentNumber, SEQUENCE_CODES } from "../src/lib/accounting/sequence";
+import {
+  confirmPurchaseOrder,
+  confirmSalesOrder,
+  createBillFromPurchaseOrder,
+  createInvoiceFromSalesOrder,
+} from "../src/lib/accounting/orders";
 
 /**
- * SEED — five and a half months of trading history for Urban Furniture,
- * 01-Apr-2026 to 15-Sep-2026.
+ * SEED — Urban Furniture's first four months, 01-Apr-2026 to 31-Jul-2026.
+ *
+ * DELIBERATELY SMALL. Ten journal entries, three invoices, two bills, three
+ * payments. Small enough to hold in your head and narrate line by line, but
+ * complete enough that every screen in the app has something real to show.
  *
  * THE RULE THIS FILE OBEYS: every journal item is produced by calling the real
  * posting engine. Nothing is inserted into journal_item directly. Hand-inserted
  * items that happen to tie are one of the named fakes -- and a judge who posts
  * one manual entry exposes it immediately.
  *
- * The target figures come from the demo script (section 10), which
- * FIXES_TO_APPLY declares canonical. If you change one number here, change it
- * there too:
+ * THE STORY, in order:
  *
- *   Assets      Bank 6,15,000 + Cash 65,000 + Debtors 2,58,000 + Input GST 54,000  = 9,92,000
- *   Liab+Cap    Creditors 74,000 + Output GST 1,08,000 + Capital 6,00,000 + CYE 2,10,000 = 9,92,000
- *   P&L         Income 6,00,000 - Purchase 3,00,000 - Other 90,000 = Net 2,10,000
- *   Budget      Q2 Furniture Procurement / Project 1: committed 1,60,000, achieved 1,48,000
+ *   1. 01-Apr  Owner puts Rs 5,00,000 into the business (4,50,000 bank + 50,000 cash)
+ *   2. 10-Apr  PO0001 to Azure for 20 tables; only 10 are delivered and billed
+ *   3. 20-Apr  Azure's bill paid in full, by bank
+ *   4. 05-May  BILL/2026/0002 from Open Wood, raised WITHOUT a PO -- still unpaid
+ *   5. 12-May  SO0001 for Nimesh becomes INV/2026/0001
+ *   6. 25-May  Nimesh pays it in full, by bank
+ *   7. 10-Jun  INV/2026/0002 for Joey, raised WITHOUT a sales order
+ *   8. 28-Jun  Joey pays Rs 30,000 of it -- a PART payment
+ *   9. 05-Jul  INV/2026/0003 for Nimesh, left open
+ *  10. 31-Jul  Showroom rent Rs 20,000, paid in cash, as a manual entry
+ *
+ * TWO THINGS ARE LEFT DELIBERATELY UNFINISHED so they can be done live:
+ *   - PO0001 still has 10 tables unbilled  -> demo the PO -> Bill conversion
+ *   - SO0002 (Joey, 3 tables) is not invoiced -> demo the SO -> Invoice conversion
+ *
+ * WHERE THE BOOKS LAND on 31-Jul-2026:
+ *
+ *   Assets       Bank 4,68,200 + Cash 30,000 + Debtors 64,400 + Input GST 14,400 = 5,77,000
+ *   Liab + Cap   Creditors 23,600 + Output GST 23,400 + Capital 5,00,000 + CYE 30,000 = 5,77,000
+ *   P&L          Income 1,30,000 - Purchases 80,000 - Other 20,000 = Net 30,000
+ *   Budget       Showroom Fitout: committed 1,00,000, achieved 80,000 (80%)
+ *
+ * Change a number here and change it in scripts/audit.ts too -- that file
+ * restates these figures independently so the two can disagree out loud.
  */
 
 const DEMO_TODAY = accountingDate(process.env.DEMO_TODAY ?? "2026-09-15");
@@ -145,7 +172,6 @@ async function seedMasters() {
   await prisma.sequence.createMany({
     data: [
       { code: SEQUENCE_CODES.CUSTOMER_INVOICE, prefix: "INV/", fiscalYear: 2026, padding: 4, useYear: true },
-      { code: SEQUENCE_CODES.CUSTOMER_INVOICE, prefix: "INV/", fiscalYear: 2026, padding: 4, useYear: true },
       { code: SEQUENCE_CODES.VENDOR_BILL, prefix: "BILL/", fiscalYear: 2026, padding: 4, useYear: true },
       { code: SEQUENCE_CODES.PAYMENT, prefix: "PAY/", fiscalYear: 2026, padding: 4, useYear: true },
       { code: SEQUENCE_CODES.MANUAL_ENTRY, prefix: "JE/", fiscalYear: 2026, padding: 4, useYear: true },
@@ -170,11 +196,10 @@ async function seedMasters() {
   const contacts = await Promise.all(
     (
       [
-        { name: "Nimesh Pathak", type: "CUSTOMER", email: "nimesh@example.com", mobile: "+91 9090090901", city: "Ahmedabad" },
-        { name: "Rahul Sharma", type: "CUSTOMER", email: "rahul@example.com", mobile: "+91 9090090902", city: "Surat" },
-        { name: "Joey Wills", type: "CUSTOMER", email: "joey@example.com", mobile: "+91 9090090903", city: "Mumbai" },
-        { name: "Azure Furniture", type: "VENDOR", email: "sales@azurefurniture.in", mobile: "+91 9090090904", city: "Jaipur" },
-        { name: "Open Wood", type: "VENDOR", email: "openwood21@example.com", mobile: "+91 9090090905", city: "Nagpur" },
+        { name: "Nimesh Pathak", type: "CUSTOMER", email: "nimesh@example.com", mobile: "+91 90900 90901", city: "Ahmedabad" },
+        { name: "Joey Wills", type: "CUSTOMER", email: "joey@example.com", mobile: "+91 90900 90902", city: "Mumbai" },
+        { name: "Azure Furniture", type: "VENDOR", email: "sales@azurefurniture.in", mobile: "+91 90900 90903", city: "Jaipur" },
+        { name: "Open Wood", type: "VENDOR", email: "accounts@openwood.in", mobile: "+91 90900 90904", city: "Nagpur" },
       ] as const
     ).map((c) => prisma.contact.create({ data: { ...c, country: "India" } })),
   );
@@ -183,12 +208,10 @@ async function seedMasters() {
   const products = await Promise.all(
     (
       [
-        { name: "Wooden Table", type: "GOODS", salesRupees: 5000, costRupees: 3000, category: "Furniture", trackInventory: true },
-        { name: "Office Chair", type: "GOODS", salesRupees: 2500, costRupees: 1200, category: "Furniture", trackInventory: true },
-        { name: "Sofa Set", type: "GOODS", salesRupees: 28000, costRupees: 15000, category: "Furniture", trackInventory: true },
-        { name: "Dining Table", type: "GOODS", salesRupees: 22000, costRupees: 12000, category: "Furniture", trackInventory: true },
-        { name: "Cushion", type: "GOODS", salesRupees: 900, costRupees: 500, category: "Furniture", trackInventory: true },
-        { name: "Delivery Charge", type: "SERVICE", salesRupees: 2400, costRupees: 0, category: "Services", trackInventory: false },
+        { name: "Wooden Table", type: "GOODS", salesRupees: 10000, costRupees: 6000, category: "Furniture", trackInventory: true },
+        { name: "Office Chair", type: "GOODS", salesRupees: 2000, costRupees: 1000, category: "Furniture", trackInventory: true },
+        { name: "Sofa Set", type: "GOODS", salesRupees: 30000, costRupees: 18000, category: "Furniture", trackInventory: true },
+        { name: "Delivery Charge", type: "SERVICE", salesRupees: 1000, costRupees: 0, category: "Services", trackInventory: false },
       ] as const
     ).map((p) =>
       prisma.product.create({
@@ -210,27 +233,28 @@ async function seedMasters() {
   const analytics = await Promise.all(
     (
       [
-        { name: "Project 1", code: "P1", type: "EXPENSE" },
-        { name: "Showroom-West", code: "SW", type: "INCOME" },
-        { name: "Furniture", code: "FUR", type: "EXPENSE" },
+        { name: "Showroom Fitout", code: "FIT", type: "EXPENSE" },
+        { name: "Retail Sales", code: "RET", type: "INCOME" },
       ] as const
     ).map((a) => prisma.analyticAccount.create({ data: a })),
   );
   const analyticByName = new Map(analytics.map((a) => [a.name, a]));
 
+  // One budget, one line, round numbers: Rs 1,00,000 planned for fitting out
+  // the showroom, of which the two vendor bills consume Rs 80,000.
   await prisma.budget.create({
     data: {
-      name: "Q2 Furniture Procurement",
-      startDate: accountingDate("2026-07-01"),
-      endDate: accountingDate("2026-09-30"),
+      name: "Showroom Fitout Q1",
+      startDate: accountingDate("2026-04-01"),
+      endDate: accountingDate("2026-06-30"),
       state: "CONFIRMED",
       responsibleId: contactByName.get("Nimesh Pathak")!.id,
       lines: {
         create: [
           {
-            analyticAccountId: analyticByName.get("Project 1")!.id,
+            analyticAccountId: analyticByName.get("Showroom Fitout")!.id,
             type: "EXPENSE",
-            committedPaise: rupeesToPaise(160000),
+            committedPaise: rupeesToPaise(100000),
           },
         ],
       },
@@ -421,161 +445,208 @@ async function postExpense(
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function seedTransactions(ctx: Ctx) {
-  // ── Opening capital. Without it the Balance Sheet has an empty Capital row
-  //    and cannot balance -- and the mockup draws a Capital row.
+  // ── 1. Opening capital ────────────────────────────────────────────────────
+  //    Without this the Balance Sheet has an empty Capital row and the business
+  //    has nothing to trade with. Posted as a real manual journal entry, which
+  //    is also the screen a judge is most likely to test.
   await prisma.$transaction(async (tx) => {
     const name = await allocateDocumentNumber(tx as Tx, SEQUENCE_CODES.MANUAL_ENTRY, FY_START);
+    const bankJournal = await tx.journal.findFirstOrThrow({ where: { type: "BANK" } });
     await postManualLines(tx as Tx, {
       name,
-      journalId: (await tx.journal.findFirstOrThrow({ where: { type: "BANK" } })).id,
+      journalId: bankJournal.id,
       date: FY_START,
-      ref: "Owner's opening capital",
-      sourceType: "OPENING_BALANCE",
+      ref: "Owner capital introduced",
       lines: [
-        { accountId: ctx.byCode.get("1100")!.id, label: "Opening bank", debitPaise: rupeesToPaise(600000), creditPaise: 0n },
-        { accountId: ctx.byCode.get("3100")!.id, label: "Owner's capital", debitPaise: 0n, creditPaise: rupeesToPaise(600000) },
+        { accountId: ctx.byCode.get("1100")!.id, label: "Opening bank balance", debitPaise: rupeesToPaise(450000), creditPaise: 0n },
+        { accountId: ctx.byCode.get("1200")!.id, label: "Opening cash float", debitPaise: rupeesToPaise(50000), creditPaise: 0n },
+        { accountId: ctx.byCode.get("3100")!.id, label: "Owner capital", debitPaise: 0n, creditPaise: rupeesToPaise(500000) },
       ],
     });
   });
 
-  // ── Sales: 120 Wooden Tables at Rs 5,000 across 12 invoices = Rs 6,00,000 net.
-  //    Every line carries GST 18%, so Output GST lands on exactly 1,08,000.
-  const invoicePlan: { date: string; qty: number; customer: string }[] = [
-    { date: "2026-04-05", qty: 8, customer: "Nimesh Pathak" },
-    { date: "2026-04-20", qty: 10, customer: "Rahul Sharma" },
-    { date: "2026-05-06", qty: 12, customer: "Joey Wills" },
-    { date: "2026-05-22", qty: 9, customer: "Nimesh Pathak" },
-    { date: "2026-06-04", qty: 11, customer: "Rahul Sharma" },
-    { date: "2026-06-21", qty: 10, customer: "Joey Wills" },
-    { date: "2026-07-07", qty: 12, customer: "Nimesh Pathak" },
-    { date: "2026-07-23", qty: 8, customer: "Rahul Sharma" },
-    { date: "2026-08-05", qty: 10, customer: "Joey Wills" },
-    { date: "2026-08-24", qty: 11, customer: "Nimesh Pathak" },
-    { date: "2026-09-02", qty: 9, customer: "Rahul Sharma" },
-    { date: "2026-09-10", qty: 10, customer: "Joey Wills" },
-  ];
-
-  const invoices = [];
-  for (const [index, plan] of invoicePlan.entries()) {
-    invoices.push(
-      await createAndConfirmInvoice(ctx, {
-        customer: plan.customer,
-        date: plan.date,
-        dueDays: 30,
-        reference: `SO-26-${String(index + 1).padStart(3, "0")}`,
-        lines: [
-          { productName: "Wooden Table", qty: plan.qty, unitPriceRupees: 5000, analyticName: "Showroom-West" },
+  // ── 2. PO0001, billed in part ─────────────────────────────────────────────
+  //    20 tables ordered, 10 delivered. The other 10 stay billable so the
+  //    PO -> Bill conversion can be demonstrated live against real data.
+  const po = await prisma.purchaseOrder.create({
+    data: {
+      name: "DRAFT-PO-0001",
+      vendorId: ctx.contactByName.get("Azure Furniture")!.id,
+      orderDate: accountingDate("2026-04-10"),
+      notes: "Showroom display tables. Delivery in two lots.",
+      lines: {
+        create: [
+          {
+            lineNo: 1,
+            productId: ctx.productByName.get("Wooden Table")!.id,
+            description: "Wooden Table",
+            analyticAccountId: ctx.analyticByName.get("Showroom Fitout")!.id,
+            quantityMilli: qtyToMilli(20),
+            unitPricePaise: rupeesToPaise(6000),
+            taxId: ctx.gst.id,
+            subtotalPaise: lineSubtotalPaise(qtyToMilli(20), rupeesToPaise(6000)),
+          },
         ],
-      }),
-    );
-  }
-
-  // ── Receipts. Invoices 1-7 settled in full, invoice 8 partially, 9-12 open.
-  //    That leaves Debtors at exactly 2,58,000, with three open invoices inside
-  //    the 0-30 day age bucket as of 15-Sep.
-  const receiptPlan: { index: number; date: string; method: "BANK" | "CASH"; rupees: number }[] = [
-    { index: 0, date: "2026-04-28", method: "BANK", rupees: 47200 },
-    { index: 1, date: "2026-05-14", method: "CASH", rupees: 59000 },
-    { index: 2, date: "2026-05-30", method: "BANK", rupees: 70800 },
-    { index: 3, date: "2026-06-15", method: "BANK", rupees: 53100 },
-    { index: 4, date: "2026-06-29", method: "BANK", rupees: 64900 },
-    { index: 5, date: "2026-07-14", method: "CASH", rupees: 59000 },
-    { index: 6, date: "2026-08-02", method: "BANK", rupees: 70800 },
-    { index: 7, date: "2026-08-18", method: "BANK", rupees: 25200 },
-  ];
-  for (const receipt of receiptPlan) {
-    const invoice = invoices[receipt.index];
-    await pay(ctx, {
-      partner: (await prisma.contact.findUniqueOrThrow({ where: { id: invoice.customerId } })).name,
-      date: receipt.date,
-      direction: "RECEIVE",
-      method: receipt.method,
-      amountRupees: receipt.rupees,
-      invoiceId: invoice.id,
-      note: `Receipt against ${invoice.name}`,
-    });
-  }
-
-  // ── Purchases: Rs 3,00,000 net, all at GST 18% so Input GST is exactly 54,000.
-  //    The three Q2 bills are tagged Project 1 and total 1,48,000 -- which is
-  //    what the budget's Achieved column reads.
-  const billPlan: { date: string; vendor: string; analytic?: string; lines: SeedLine[] }[] = [
-    { date: "2026-04-10", vendor: "Azure Furniture", lines: [{ productName: "Office Chair", qty: 50, unitPriceRupees: 1200, analyticName: "Furniture" }] },
-    {
-      date: "2026-05-12",
-      vendor: "Open Wood",
-      lines: [
-        { productName: "Wooden Table", qty: 10, unitPriceRupees: 3000, analyticName: "Furniture" },
-        { productName: "Cushion", qty: 40, unitPriceRupees: 500, analyticName: "Furniture" },
-      ],
+      },
     },
-    { date: "2026-06-18", vendor: "Azure Furniture", lines: [{ productName: "Office Chair", qty: 35, unitPriceRupees: 1200, analyticName: "Furniture" }] },
-    { date: "2026-07-09", vendor: "Open Wood", lines: [{ productName: "Sofa Set", qty: 4, unitPriceRupees: 15000, analyticName: "Project 1" }] },
-    {
-      date: "2026-08-11",
-      vendor: "Azure Furniture",
-      lines: [
-        { productName: "Office Chair", qty: 40, unitPriceRupees: 1200, analyticName: "Project 1" },
-        { productName: "Cushion", qty: 8, unitPriceRupees: 500, analyticName: "Project 1" },
-      ],
+  });
+  await prisma.$transaction((tx) => confirmPurchaseOrder(tx as Tx, po.id));
+
+  // Convert, then trim the draft to the 10 that actually arrived.
+  const azureBill = await prisma.$transaction(async (tx) => {
+    const draft = await createBillFromPurchaseOrder(tx as Tx, po.id, {
+      billDate: accountingDate("2026-04-10"),
+      billReference: "AZ-26-114",
+    });
+    const line = await tx.vendorBillLine.findFirstOrThrow({ where: { billId: draft.id } });
+    await tx.vendorBillLine.update({
+      where: { id: line.id },
+      data: {
+        quantityMilli: qtyToMilli(10),
+        subtotalPaise: lineSubtotalPaise(qtyToMilli(10), rupeesToPaise(6000)),
+      },
+    });
+    return draft;
+  });
+  await prisma.$transaction((tx) => confirmVendorBill(tx as Tx, azureBill.id));
+
+  // ── 3. Azure paid in full, by bank ────────────────────────────────────────
+  await pay(ctx, {
+    partner: "Azure Furniture",
+    date: "2026-04-20",
+    direction: "SEND",
+    method: "BANK",
+    amountRupees: 70800,
+    billId: azureBill.id,
+    note: "Payment against AZ-26-114",
+  });
+
+  // ── 4. A bill raised WITHOUT a purchase order ─────────────────────────────
+  //    This is the one that keeps the PO smart button hidden, and the one that
+  //    leaves Creditors non-zero on the Balance Sheet.
+  await createAndConfirmBill(ctx, {
+    vendor: "Open Wood",
+    date: "2026-05-05",
+    dueDays: 30,
+    reference: "OW-26-088",
+    lines: [
+      { productName: "Office Chair", qty: 20, unitPriceRupees: 1000, analyticName: "Showroom Fitout" },
+    ],
+  });
+
+  // ── 5. SO0001 becomes INV/2026/0001 ───────────────────────────────────────
+  const so1 = await prisma.salesOrder.create({
+    data: {
+      name: "DRAFT-SO-0001",
+      customerId: ctx.contactByName.get("Nimesh Pathak")!.id,
+      orderDate: accountingDate("2026-05-12"),
+      lines: {
+        create: [
+          {
+            lineNo: 1,
+            productId: ctx.productByName.get("Wooden Table")!.id,
+            description: "Wooden Table",
+            analyticAccountId: ctx.analyticByName.get("Retail Sales")!.id,
+            quantityMilli: qtyToMilli(5),
+            unitPricePaise: rupeesToPaise(10000),
+            taxId: ctx.gst.id,
+            subtotalPaise: lineSubtotalPaise(qtyToMilli(5), rupeesToPaise(10000)),
+          },
+        ],
+      },
     },
-    { date: "2026-09-04", vendor: "Open Wood", lines: [{ productName: "Dining Table", qty: 3, unitPriceRupees: 12000, analyticName: "Project 1" }] },
-  ];
+  });
+  await prisma.$transaction((tx) => confirmSalesOrder(tx as Tx, so1.id));
 
-  const bills = [];
-  for (const [index, plan] of billPlan.entries()) {
-    bills.push(
-      await createAndConfirmBill(ctx, {
-        vendor: plan.vendor,
-        date: plan.date,
-        dueDays: 30,
-        reference: `ABC-26-${String(index + 1).padStart(3, "0")}`,
-        lines: plan.lines,
-      }),
-    );
-  }
+  const nimeshInvoice = await prisma.$transaction((tx) =>
+    createInvoiceFromSalesOrder(tx as Tx, so1.id, {
+      invoiceDate: accountingDate("2026-05-12"),
+      invoiceReference: "SO-26-001",
+    }),
+  );
+  await prisma.$transaction((tx) => confirmCustomerInvoice(tx as Tx, nimeshInvoice.id));
 
-  // ── Vendor payments. Bills 1, 2 and 4 in full; bill 3 split across cash and
-  //    bank; bill 5 partially. Bill 6 untouched. Creditors lands on 74,000.
-  const vendorPayPlan: { index: number; date: string; method: "BANK" | "CASH"; rupees: number }[] = [
-    { index: 0, date: "2026-05-05", method: "BANK", rupees: 70800 },
-    { index: 1, date: "2026-06-08", method: "BANK", rupees: 59000 },
-    { index: 2, date: "2026-07-02", method: "CASH", rupees: 23000 },
-    { index: 2, date: "2026-07-16", method: "BANK", rupees: 26560 },
-    { index: 3, date: "2026-08-06", method: "BANK", rupees: 70800 },
-    { index: 4, date: "2026-09-08", method: "BANK", rupees: 29840 },
-  ];
-  for (const payment of vendorPayPlan) {
-    const bill = bills[payment.index];
-    await pay(ctx, {
-      partner: (await prisma.contact.findUniqueOrThrow({ where: { id: bill.vendorId } })).name,
-      date: payment.date,
-      direction: "SEND",
-      method: payment.method,
-      amountRupees: payment.rupees,
-      billId: bill.id,
-      note: `Payment against ${bill.name}`,
-    });
-  }
+  // ── 6. Nimesh pays it in full ─────────────────────────────────────────────
+  await pay(ctx, {
+    partner: "Nimesh Pathak",
+    date: "2026-05-25",
+    direction: "RECEIVE",
+    method: "BANK",
+    amountRupees: 59000,
+    invoiceId: nimeshInvoice.id,
+    note: "Receipt against INV/2026/0001",
+  });
 
-  // ── Showroom rent, Rs 15,000 a month for six months = Rs 90,000 of Other
-  //    Expense. Two months paid in cash, four by bank.
-  const rentPlan: { date: string; method: "BANK" | "CASH" }[] = [
-    { date: "2026-04-30", method: "BANK" },
-    { date: "2026-05-31", method: "CASH" },
-    { date: "2026-06-30", method: "BANK" },
-    { date: "2026-07-31", method: "CASH" },
-    { date: "2026-08-31", method: "BANK" },
-    { date: "2026-09-15", method: "BANK" },
-  ];
-  for (const rent of rentPlan) {
-    await postExpense(ctx, {
-      date: rent.date,
-      amountRupees: 15000,
-      method: rent.method,
-      label: "Showroom rent",
-    });
-  }
+  // ── 7. An invoice raised WITHOUT a sales order ────────────────────────────
+  const joeyInvoice = await createAndConfirmInvoice(ctx, {
+    customer: "Joey Wills",
+    date: "2026-06-10",
+    dueDays: 30,
+    reference: "JW-26-002",
+    lines: [
+      { productName: "Sofa Set", qty: 2, unitPriceRupees: 30000, analyticName: "Retail Sales" },
+    ],
+  });
+
+  // ── 8. ...paid only in part. Residual 40,800, badge reads PARTIAL. ─────────
+  await pay(ctx, {
+    partner: "Joey Wills",
+    date: "2026-06-28",
+    direction: "RECEIVE",
+    method: "BANK",
+    amountRupees: 30000,
+    invoiceId: joeyInvoice.id,
+    note: "Part payment against INV/2026/0002",
+  });
+
+  // ── 9. An invoice left completely open ────────────────────────────────────
+  //    The bank statement settles this one during the reconciliation demo, so
+  //    leave it untouched.
+  await createAndConfirmInvoice(ctx, {
+    customer: "Nimesh Pathak",
+    date: "2026-07-05",
+    dueDays: 30,
+    reference: "NP-26-003",
+    lines: [
+      { productName: "Office Chair", qty: 10, unitPriceRupees: 2000, analyticName: "Retail Sales" },
+    ],
+  });
+
+  // ── 10. Showroom rent, in cash ────────────────────────────────────────────
+  //     The only Other Expense in the books, so that P&L row has exactly one
+  //     thing in it and is easy to point at.
+  await postExpense(ctx, {
+    date: "2026-07-31",
+    amountRupees: 20000,
+    method: "CASH",
+    label: "Showroom rent",
+  });
+
+  // ── Left unfinished on purpose: SO0002 ────────────────────────────────────
+  //    Confirmed, never invoiced. Convert it live to show SO -> Invoice.
+  const so2 = await prisma.salesOrder.create({
+    data: {
+      name: "DRAFT-SO-0002",
+      customerId: ctx.contactByName.get("Joey Wills")!.id,
+      orderDate: accountingDate("2026-07-20"),
+      notes: "Awaiting delivery slot. Invoice on dispatch.",
+      lines: {
+        create: [
+          {
+            lineNo: 1,
+            productId: ctx.productByName.get("Wooden Table")!.id,
+            description: "Wooden Table",
+            analyticAccountId: ctx.analyticByName.get("Retail Sales")!.id,
+            quantityMilli: qtyToMilli(3),
+            unitPricePaise: rupeesToPaise(10000),
+            taxId: ctx.gst.id,
+            subtotalPaise: lineSubtotalPaise(qtyToMilli(3), rupeesToPaise(10000)),
+          },
+        ],
+      },
+    },
+  });
+  await prisma.$transaction((tx) => confirmSalesOrder(tx as Tx, so2.id));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -10,12 +10,12 @@ import {
   EmptyState,
   PageHeader,
   Panel,
-  PanelHeader,
   StateBadge,
   Table,
   Td,
   Th,
 } from "@/components/ui/primitives";
+import { BudgetPie } from "@/components/ui/pie";
 import { PrintButton } from "@/components/report-frame";
 
 export const dynamic = "force-dynamic";
@@ -130,6 +130,11 @@ export default async function BudgetReportPage() {
                       </Td>
                       <Td>
                         <div className="flex items-center gap-2">
+                          <BudgetPie
+                            percent={line.achievedPercent}
+                            className={over ? "text-oxide" : "text-walnut"}
+                            title={`${line.analyticName}: ${Math.round(line.achievedPercent)}% achieved`}
+                          />
                           <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
                             <div
                               className={`h-full rounded-full ${over ? "bg-oxide" : "bg-walnut"}`}

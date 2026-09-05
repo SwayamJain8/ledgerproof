@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { prisma } from "@/lib/db";
 import { Money } from "@/components/ui/money";
 import { Badge, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
+import { KanbanCard, KanbanGrid, ViewRoot, ViewSwitch } from "@/components/ui/view-switch";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contacts" };
@@ -26,8 +27,12 @@ export default async function ContactsPage() {
         eyebrow="Master data"
         title="Contacts"
         description="Customers and vendors. A contact may carry its own receivable or payable account — rung 1 of resolution chain R4. Leave them blank and the company default applies."
+        actions={<ViewSwitch storageKey="contacts" />}
       />
 
+      <ViewRoot
+        storageKey="contacts"
+        list={
       <Panel>
         <Table>
           <thead>
@@ -75,6 +80,42 @@ export default async function ContactsPage() {
           </tbody>
         </Table>
       </Panel>
+        }
+        kanban={
+          <Panel>
+            <KanbanGrid>
+              {contacts.map((contact) => {
+                const owed = contact.customerInvoices.reduce((s, i) => s + i.residualPaise, 0n);
+                const owing = contact.vendorBills.reduce((s, b) => s + b.residualPaise, 0n);
+                const control = contact.receivableAccount ?? contact.payableAccount;
+                return (
+                  <KanbanCard
+                    key={contact.id}
+                    title={contact.name}
+                    subtitle={contact.email ?? contact.mobile ?? undefined}
+                    badge={
+                      <Badge tone={TYPE_TONES[contact.type as keyof typeof TYPE_TONES] ?? "neutral"}>
+                        {contact.type}
+                      </Badge>
+                    }
+                    rows={[
+                      { label: "City", value: contact.city ?? "—" },
+                      {
+                        label: "Control account",
+                        value: control ? `${control.code} ${control.name}` : "Company default",
+                      },
+                      {
+                        label: owing > owed ? "We owe" : "Owed to us",
+                        value: <Money paise={owed > 0n ? owed : owing} />,
+                      },
+                    ]}
+                  />
+                );
+              })}
+            </KanbanGrid>
+          </Panel>
+        }
+      />
     </>
   );
 }

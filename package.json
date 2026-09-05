@@ -15,7 +15,11 @@
     "db:reset": "prisma migrate reset --force",
     "db:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
-    "audit": "tsx scripts/audit.ts"
+    "audit": "tsx scripts/audit.ts",
+    "check:orders": "tsx scripts/check-orders.ts",
+    "check:reconcile": "tsx scripts/check-reconcile.ts",
+    "check:reconcile:e2e": "tsx scripts/check-reconcile-e2e.ts",
+    "check:budget": "tsx scripts/check-budget-revision.ts"
   },
   "allowScripts": {
     "@prisma/engines": true,

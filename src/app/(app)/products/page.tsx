@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { prisma } from "@/lib/db";
 import { Money } from "@/components/ui/money";
 import { Badge, PageHeader, Panel, Table, Td, Th } from "@/components/ui/primitives";
+import { KanbanCard, KanbanGrid, ViewRoot, ViewSwitch } from "@/components/ui/view-switch";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Products" };
@@ -35,9 +36,13 @@ export default async function ProductsPage() {
         eyebrow="Master data"
         title="Products"
         description="Each product may name its own income and expense accounts — rung 2 of chains R1 and R2. Where it does not, the category is tried next, and then the journal default."
+        actions={<ViewSwitch storageKey="products" />}
       />
 
       <div className="space-y-4">
+        <ViewRoot
+          storageKey="products"
+          list={
         <Panel>
           <h2 className="border-b border-rule px-4 py-3 font-display text-[15px] text-ink">
             Products
@@ -95,6 +100,38 @@ export default async function ProductsPage() {
             </tbody>
           </Table>
         </Panel>
+          }
+          kanban={
+            <Panel>
+              <KanbanGrid>
+                {products.map((product) => (
+                  <KanbanCard
+                    key={product.id}
+                    title={product.name}
+                    subtitle={product.category?.name ?? undefined}
+                    badge={<Badge tone="neutral">{product.type}</Badge>}
+                    rows={[
+                      { label: "Sells for", value: <Money paise={product.salesPricePaise} /> },
+                      { label: "Costs", value: <Money paise={product.costPaise} /> },
+                      {
+                        label: "Income a/c",
+                        value: product.incomeAccount
+                          ? `${product.incomeAccount.code} ${product.incomeAccount.name}`
+                          : "Inherit",
+                      },
+                      {
+                        label: "Expense a/c",
+                        value: product.expenseAccount
+                          ? `${product.expenseAccount.code} ${product.expenseAccount.name}`
+                          : "Inherit",
+                      },
+                    ]}
+                  />
+                ))}
+              </KanbanGrid>
+            </Panel>
+          }
+        />
 
         <Panel>
           <h2 className="border-b border-rule px-4 py-3 font-display text-[15px] text-ink">

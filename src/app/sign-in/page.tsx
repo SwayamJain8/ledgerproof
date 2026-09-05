@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { Wordmark } from "@/components/wordmark";
 import { SignInForm } from "./sign-in-form";
@@ -78,6 +79,13 @@ export default async function SignInPage({
           </p>
 
           <SignInForm next={next} />
+
+          <p className="mt-6 text-[12.5px] text-ink-3">
+            Need a customer portal account?{" "}
+            <Link href="/sign-up" className="text-walnut hover:underline">
+              Sign up
+            </Link>
+          </p>
 
           {/* Judges and demo viewers should not have to hunt for credentials. */}
           <div className="mt-8 rounded-md border border-dashed border-rule-2 bg-surface-2 px-3.5 py-3">

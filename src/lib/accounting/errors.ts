@@ -20,7 +20,12 @@ export type PostingErrorCode =
   | "PERIOD_LOCKED"
   | "UNBALANCED_ENTRY"
   | "OVER_ALLOCATION"
-  | "DOCUMENT_NOT_FOUND";
+  | "DOCUMENT_NOT_FOUND"
+  /// An order must be confirmed before it can be converted.
+  | "ORDER_NOT_CONFIRMED"
+  /// Every line on the order has already been converted in full.
+  | "NOTHING_TO_BILL"
+  | "NOTHING_TO_INVOICE";
 
 export class PostingError extends Error {
   readonly code: PostingErrorCode;

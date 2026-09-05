@@ -158,3 +158,19 @@
     margin: 14mm;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   List / Kanban view switching.
+
+   Both views are rendered server-side and toggled with a data attribute, so
+   the switch is instant and needs no second query. Defined here rather than
+   inline so it works on the first paint, before hydration.
+   ───────────────────────────────────────────────────────────────────────── */
+.view-root[data-view="list"] .view-kanban { display: none; }
+.view-root[data-view="kanban"] .view-list { display: none; }
+
+/* Kanban is a browsing view, not a printing one. */
+@media print {
+  .view-root .view-kanban { display: none !important; }
+  .view-root .view-list { display: block !important; }
+}

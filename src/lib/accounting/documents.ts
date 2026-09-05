@@ -187,8 +187,17 @@ export async function confirmCustomerInvoice(tx: Tx, invoiceId: string, userId?:
     },
   });
 
-  // A partially-invoiced sales order stays open for the rest.
+  // A partially-invoiced sales order stays open for the rest. Roll the
+  // converted quantity up to the order lines FIRST -- syncSalesOrderState
+  // reads those counters to decide the order's new state.
   if (invoice.salesOrderId) {
+    for (const line of invoice.lines) {
+      if (!line.salesOrderLineId) continue;
+      await tx.salesOrderLine.update({
+        where: { id: line.salesOrderLineId },
+        data: { qtyInvoicedMilli: { increment: line.quantityMilli } },
+      });
+    }
     await syncSalesOrderState(tx, invoice.salesOrderId);
   }
 
@@ -243,7 +252,16 @@ export async function confirmVendorBill(tx: Tx, billId: string, userId?: string 
     },
   });
 
+  // Roll the billed quantity up to the order lines BEFORE syncing, since
+  // syncPurchaseOrderState decides the order's state from those counters.
   if (bill.purchaseOrderId) {
+    for (const line of bill.lines) {
+      if (!line.purchaseOrderLineId) continue;
+      await tx.purchaseOrderLine.update({
+        where: { id: line.purchaseOrderLineId },
+        data: { qtyBilledMilli: { increment: line.quantityMilli } },
+      });
+    }
     await syncPurchaseOrderState(tx, bill.purchaseOrderId);
   }
 

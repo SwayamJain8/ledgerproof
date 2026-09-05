@@ -234,29 +234,29 @@ async function auditBalanceSheet() {
   const byCode = new Map(balances.map((b) => [b.code, b]));
   const at = (code: string) => byCode.get(code)?.balancePaise ?? -1n;
 
-  expectPaise("Bank A/c", at("1100"), rupeesToPaise(615000));
-  expectPaise("Cash A/c", at("1200"), rupeesToPaise(65000));
-  expectPaise("Debtors A/c", at("1300"), rupeesToPaise(258000));
-  expectPaise("Input GST A/c", at("1400"), rupeesToPaise(54000));
-  expectPaise("Creditors A/c", at("2100"), rupeesToPaise(74000));
-  expectPaise("Output GST A/c", at("2200"), rupeesToPaise(108000));
-  expectPaise("Capital A/c", at("3100"), rupeesToPaise(600000));
-  expectPaise("Total assets", bs.totalAssetsPaise, rupeesToPaise(992000));
-  expectPaise("Total liabilities + capital", bs.totalLiabilitiesPaise, rupeesToPaise(992000));
+  expectPaise("Bank A/c", at("1100"), rupeesToPaise(468200));
+  expectPaise("Cash A/c", at("1200"), rupeesToPaise(30000));
+  expectPaise("Debtors A/c", at("1300"), rupeesToPaise(64400));
+  expectPaise("Input GST A/c", at("1400"), rupeesToPaise(14400));
+  expectPaise("Creditors A/c", at("2100"), rupeesToPaise(23600));
+  expectPaise("Output GST A/c", at("2200"), rupeesToPaise(23400));
+  expectPaise("Capital A/c", at("3100"), rupeesToPaise(500000));
+  expectPaise("Total assets", bs.totalAssetsPaise, rupeesToPaise(577000));
+  expectPaise("Total liabilities + capital", bs.totalLiabilitiesPaise, rupeesToPaise(577000));
 }
 
 async function auditProfitAndLoss() {
   section("5. Profit & Loss, 01-Apr-2026 to 15-Sep-2026");
 
   const pl = await profitAndLoss(prisma, { from: FY_START, to: ASOF });
-  expectPaise("Income", pl.income.amountPaise, rupeesToPaise(600000));
-  expectPaise("Total expenses", pl.expenses.amountPaise, rupeesToPaise(390000));
-  expectPaise("Net income", pl.netIncomePaise, rupeesToPaise(210000));
+  expectPaise("Income", pl.income.amountPaise, rupeesToPaise(130000));
+  expectPaise("Total expenses", pl.expenses.amountPaise, rupeesToPaise(100000));
+  expectPaise("Net income", pl.netIncomePaise, rupeesToPaise(30000));
 
   const purchase = pl.expenseRows.find((r) => r.label.toLowerCase().includes("purchase"));
   const other = pl.expenseRows.find((r) => r.label.toLowerCase().includes("other"));
-  expectPaise("  Purchase expense", purchase?.amountPaise ?? -1n, rupeesToPaise(300000));
-  expectPaise("  Other expense", other?.amountPaise ?? -1n, rupeesToPaise(90000));
+  expectPaise("  Purchase expense", purchase?.amountPaise ?? -1n, rupeesToPaise(80000));
+  expectPaise("  Other expense", other?.amountPaise ?? -1n, rupeesToPaise(20000));
 
   // Net income must equal the Current Year Earnings line the Balance Sheet
   // prints, or the two reports are telling different stories.
@@ -275,15 +275,15 @@ async function auditBudget() {
   section("6. Budget actuals");
 
   const budget = await prisma.budget.findFirstOrThrow({
-    where: { name: "Q2 Furniture Procurement" },
+    where: { name: "Showroom Fitout Q1" },
   });
   const actuals = await budgetActuals(prisma, budget.id);
   const line = actuals.lines[0];
 
-  expectPaise("Committed", line.committedPaise, rupeesToPaise(160000));
-  expectPaise("Achieved (from journal_item, not from bills)", line.achievedPaise, rupeesToPaise(148000));
-  expectPaise("Amount to achieve", line.amountToAchievePaise, rupeesToPaise(12000));
-  expectTrue("Achieved percent", line.achievedPercent === 92.5, `${line.achievedPercent}%`);
+  expectPaise("Committed", line.committedPaise, rupeesToPaise(100000));
+  expectPaise("Achieved (from journal_item, not from bills)", line.achievedPaise, rupeesToPaise(80000));
+  expectPaise("Amount to achieve", line.amountToAchievePaise, rupeesToPaise(20000));
+  expectTrue("Achieved percent", line.achievedPercent === 80, `${line.achievedPercent}%`);
 }
 
 async function auditSequences() {
