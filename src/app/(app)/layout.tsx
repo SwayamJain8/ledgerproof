@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { getSession } from "@/lib/auth/session";
+import { endSession, getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { trialBalance } from "@/lib/reports/ledger";
 import { currentFiscalYear, formatDate, today } from "@/lib/app-context";
@@ -11,6 +11,19 @@ import { LedgerPulse } from "@/components/shell/ledger-pulse";
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) {
+    redirect("/sign-in");
+  }
+
+  // The cookie is signed and self-contained, so it outlives the row it names.
+  // Reseed the database and every open tab still carries a valid-looking
+  // session pointing at a user that no longer exists. Catch it on the way in,
+  // rather than letting it surface as a foreign-key error on the first save.
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { id: true, active: true },
+  });
+  if (!user || !user.active) {
+    await endSession();
     redirect("/sign-in");
   }
 

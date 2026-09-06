@@ -1,6 +1,9 @@
 import "server-only";
 
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
+import { prisma } from "@/lib/db";
 
 /**
  * Sessions are a signed cookie, not a database table.
@@ -118,10 +121,29 @@ export async function getSession(): Promise<SessionPayload | null> {
  * The session, or throw. Every Server Action that writes calls this -- the
  * middleware guards navigation, but a Server Action is a public POST endpoint
  * and must authenticate itself.
+ *
+ * It also checks the user still EXISTS, which is not paranoia. The cookie is
+ * signed and self-contained, so it happily outlives the row it names -- reseed
+ * the database, or deactivate someone, and their browser still presents a
+ * valid-looking session carrying a user id that is now a dangling reference.
+ *
+ * Every posted entry records who posted it, so that dangling id reaches a
+ * foreign key and the whole transaction dies with an opaque database error.
+ * Far better to notice here and send them to sign in again.
  */
 export async function requireSession(): Promise<SessionPayload> {
   const session = await getSession();
   if (!session) throw new Error("Not signed in.");
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { id: true, active: true },
+  });
+  if (!user || !user.active) {
+    await endSession();
+    redirect("/sign-in");
+  }
+
   return session;
 }
 

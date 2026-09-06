@@ -46,7 +46,7 @@ export function CreateInvoiceButton({
     <form action={createInvoiceFromOrderAction} className="flex flex-wrap items-end gap-2">
       <input type="hidden" name="orderId" value={orderId} />
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wide text-ink-3">Bill date</span>
+        <span className="text-[11px] uppercase tracking-wide text-ink-3">Invoice date</span>
         <Input name="invoiceDate" type="date" defaultValue={defaultInvoiceDate} className="w-40" />
       </label>
       <label className="flex flex-col gap-1">
