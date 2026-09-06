@@ -8,7 +8,7 @@ import { prisma, type Tx } from "@/lib/db";
 import { requireSession } from "@/lib/auth/session";
 import { accountingDate } from "@/lib/accounting/dates";
 import { rupeesToPaise } from "@/lib/money";
-import { postManualLines, reverseEntry } from "@/lib/accounting/posting";
+import { postManualLines, resetEntryToDraft, reverseEntry } from "@/lib/accounting/posting";
 import { allocateDocumentNumber, SEQUENCE_CODES } from "@/lib/accounting/sequence";
 import { PostingError } from "@/lib/accounting/errors";
 
@@ -144,4 +144,37 @@ export async function reverseEntryAction(formData: FormData) {
 
   revalidatePath("/journal-entries");
   redirect(`/journal-entries/${reversalId}`);
+}
+
+/**
+ * Un-post the most recent entry. ADMINISTRATOR ONLY.
+ *
+ * This is the one place the append-only guard can be stood down, and it is
+ * hedged accordingly: only an admin, only the newest entry, only outside a
+ * locked period, and never one a payment has already been made against.
+ *
+ * The "newest entry only" rule is not a convenience -- pulling an entry out of
+ * the middle of a sealed chain would leave every later seal pointing at
+ * something that is no longer there. Older mistakes are cancelled by reversal.
+ */
+export async function resetEntryAction(formData: FormData) {
+  const session = await requireSession();
+  const entryId = String(formData.get("entryId") ?? "");
+  if (!entryId) return;
+
+  try {
+    await prisma.$transaction((tx) =>
+      resetEntryToDraft(tx as Tx, entryId, {
+        userId: session.userId,
+        isAdmin: session.role === "ADMIN",
+      }),
+    );
+  } catch (error) {
+    const message =
+      error instanceof PostingError ? error.message : "That entry could not be reset.";
+    redirect(`/journal-entries/${entryId}?error=${encodeURIComponent(message)}`);
+  }
+
+  revalidatePath("/journal-entries");
+  redirect(`/journal-entries/${entryId}`);
 }

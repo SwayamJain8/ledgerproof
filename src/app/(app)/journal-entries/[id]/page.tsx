@@ -16,8 +16,9 @@ import {
   Td,
   Th,
 } from "@/components/ui/primitives";
+import { getSession } from "@/lib/auth/session";
 import { ExplainPanel, type TraceRow } from "./explain-panel";
-import { ReverseButton } from "./reverse-button";
+import { ResetToDraftButton, ReverseButton } from "./reverse-button";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 export default async function JournalEntryPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const session = await getSession();
 
   const entry = await prisma.journalEntry.findUnique({
     where: { id },
@@ -60,6 +62,15 @@ export default async function JournalEntryPage({ params }: { params: Promise<{ i
   });
 
   if (!entry) notFound();
+
+  // Only the tail of the hash chain can be un-posted; anything older is
+  // cancelled by reversal instead.
+  const tail = await prisma.journalEntry.findFirst({
+    where: { chainIndex: { not: null } },
+    orderBy: { chainIndex: "desc" },
+    select: { id: true },
+  });
+  const isNewestEntry = tail?.id === entry.id;
 
   const trace = (entry.postingTrace as unknown as TraceRow[] | null) ?? [];
   const sourceHref =
@@ -96,6 +107,11 @@ export default async function JournalEntryPage({ params }: { params: Promise<{ i
               reversal, and not one that has already been reversed once. */}
           {entry.state === "POSTED" && !entry.reversalOf && !entry.reversedBy ? (
             <ReverseButton entryId={entry.id} />
+          ) : null}
+          {/* Administrator only, and only on the newest entry — an accountant
+              never sees a button that would refuse them. */}
+          {session?.role === "ADMIN" && entry.state === "POSTED" && isNewestEntry ? (
+            <ResetToDraftButton entryId={entry.id} />
           ) : null}
         </div>
       </div>

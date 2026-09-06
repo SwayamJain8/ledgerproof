@@ -756,6 +756,30 @@ export async function resetEntryToDraft(
     throw new PostingError("PERIOD_LOCKED", { entryId });
   }
 
+  // ── Only the most recent entry may be un-posted ─────────────────────────
+  //
+  // Each entry is sealed with the hash of the one before it. Pull an entry out
+  // of the MIDDLE and every seal after it is left pointing at something that no
+  // longer sits there -- the chain reports itself broken, correctly, and no
+  // amount of re-posting repairs it.
+  //
+  // Removing the LAST link is different: nothing points at it, so the chain
+  // simply gets shorter, and re-posting appends it cleanly again.
+  //
+  // Anything older is cancelled by reversal instead. That is not a limitation
+  // we ran into -- it is the whole point of sealing the ledger.
+  const tail = await tx.journalEntry.findFirst({
+    where: { chainIndex: { not: null } },
+    orderBy: { chainIndex: "desc" },
+    select: { id: true, name: true },
+  });
+  if (tail && tail.id !== entryId) {
+    throw new PostingError("NOT_POSTED", {
+      entryId,
+      reason: `only the most recent entry (${tail.name}) can be reset — cancel this one by reversal instead`,
+    });
+  }
+
   // You cannot un-post a document someone has already paid against.
   if (entry.sourceType === "CUSTOMER_INVOICE" && entry.sourceId) {
     const paid = await tx.paymentAllocation.count({ where: { customerInvoiceId: entry.sourceId } });
@@ -773,7 +797,12 @@ export async function resetEntryToDraft(
 
   // ORDERING: header first, then items -- the exact reverse of posting, because
   // the trigger reads the parent's state to decide whether the child is frozen.
-  await tx.journalEntry.update({ where: { id: entryId }, data: { state: "DRAFT", postedAt: null } });
+  // Unseal it as well as un-post it. Leaving a stale hash on a draft would make
+  // the chain verifier walk an entry that is no longer part of the ledger.
+  await tx.journalEntry.update({
+    where: { id: entryId },
+    data: { state: "DRAFT", postedAt: null, chainIndex: null, prevHash: null, hash: null },
+  });
   await tx.journalItem.updateMany({ where: { entryId }, data: { state: "DRAFT" } });
 
   await tx.auditLog.create({

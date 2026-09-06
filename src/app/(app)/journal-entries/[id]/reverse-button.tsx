@@ -1,10 +1,10 @@
 "use client";
 
 import { useFormStatus } from "react-dom";
-import { Undo2 } from "lucide-react";
+import { RotateCcw, Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/primitives";
-import { reverseEntryAction } from "../actions";
+import { resetEntryAction, reverseEntryAction } from "../actions";
 
 function Submit() {
   const { pending } = useFormStatus();
@@ -27,5 +27,28 @@ export function ReverseButton({ entryId }: { entryId: string }) {
       <input type="hidden" name="entryId" value={entryId} />
       <Submit />
     </form>
+  );
+}
+
+/**
+ * Admin-only. Rendered only for an administrator AND only on the newest entry,
+ * so an accountant never sees a button that would refuse them.
+ */
+export function ResetToDraftButton({ entryId }: { entryId: string }) {
+  return (
+    <form action={resetEntryAction}>
+      <input type="hidden" name="entryId" value={entryId} />
+      <ResetSubmit />
+    </form>
+  );
+}
+
+function ResetSubmit() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" disabled={pending}>
+      <RotateCcw className="h-3.5 w-3.5" />
+      {pending ? "Resetting…" : "Reset to draft"}
+    </Button>
   );
 }
